@@ -70,7 +70,7 @@ Select checks by what changed:
 - Media or motion: inspect meaningful states, reduced-motion behavior when affected, and a useful result when a required resource or effect is unavailable.
 - Data presentation or output: check the displayed meaning against the source and inspect the requested reading or export path.
 
-Open the result the way its audience will receive it. For a new design or redesign, follow the intended reading order on the rendered result. Can the reader find the main point, the evidence or condition that qualifies it, and the next action if one is needed? For a targeted edit, exercise the affected task at the width or state that prompted the change. Compare with the original under the same conditions when useful. Distinguish observed faults from aesthetic preferences.
+Open the result the way its audience will receive it. For a new design or redesign, follow the intended reading order on the rendered result and identify which choices of composition, typography, or imagery express the intended character. Can the reader find the main point, the evidence or condition that qualifies it, and the next action if one is needed? For a targeted edit, exercise the affected task at the width or state that prompted the change. Compare with the original under the same conditions when useful. Distinguish observed faults from aesthetic preferences.
 
 For a **review**, stop after reporting each material finding, its evidence, and the recommended change. Do not apply fixes or change files or settings. For **implementation**, correct in-scope failures, recheck the affected result, and deliver the artifact with the important changes and preserved behavior. Flag out-of-scope faults instead of fixing them.
 
