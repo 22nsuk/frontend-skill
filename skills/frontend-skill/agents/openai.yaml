@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Skill"
+  short_description: "Design clear, distinctive interfaces with restraint"
+  default_prompt: "Use $frontend-skill to design or refine this interface while preserving its content, behavior, and brand."
