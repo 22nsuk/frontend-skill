@@ -2,7 +2,7 @@
 
 웹페이지·제품 UI·보고서의 시각적 위계와 개성을 설계하는 경량 스킬 초안입니다. 요청한 변경 규모에 맞춰 작업하고, 내용·브랜드·동작을 보존하면서 읽기와 조작을 개선하도록 구성했습니다.
 
-Codex, Claude Code, Mixdog에 같은 스킬 폴더를 설치해 사용합니다. 호스트별 자동 선택률, 생성 품질, 시간·토큰 절감 효과는 아직 비교 검증하지 않았습니다.
+Codex와 Claude Code는 표준 스킬 폴더를 사용합니다. Mixdog용 ZIP에는 같은 지침과 참조 문서에 Mixdog의 선택 문구를 추가했습니다. 호스트별 자동 선택률, 생성 품질, 시간·토큰 절감 효과는 아직 비교 검증하지 않았습니다.
 
 ## 적용 범위
 
@@ -15,7 +15,7 @@ Codex, Claude Code, Mixdog에 같은 스킬 폴더를 설치해 사용합니다.
 
 ## 구성
 
-설치 단위는 [`skills/frontend-skill/`](skills/frontend-skill/) 폴더 전체입니다.
+스킬 본문과 참조 문서의 원본은 [`skills/frontend-skill/`](skills/frontend-skill/)에 있습니다.
 
 | 파일 | 역할 |
 | --- | --- |
@@ -31,7 +31,9 @@ README와 [평가 사례](docs/evaluation.md)는 저장소 이용자를 위한 �
 
 ## 설치와 호출
 
-저장소를 내려받은 뒤 [`skills/frontend-skill/`](skills/frontend-skill/) **폴더 전체**를 사용할 호스트의 아래 경로에 복사합니다. 상위 `skills` 폴더가 없으면 만드세요. `~`는 사용자 홈, `<프로젝트>`는 스킬을 사용할 프로젝트, `<Mixdog 데이터 폴더>`는 사용 중인 Mixdog의 데이터 위치입니다.
+**Codex와 Claude Code**는 저장소에서 [표준 스킬 폴더](skills/frontend-skill/) 전체를 복사하세요. **Mixdog**는 [Mixdog 설치 ZIP](packages/frontend-skill-mixdog.zip?raw=true)을 받아 데이터 폴더의 `skills/` 안에 압축을 푸세요. ZIP 안에 이미 `frontend-skill/` 폴더가 있습니다.
+
+상위 `skills` 폴더가 없으면 만드세요. `~`는 사용자 홈, `<프로젝트>`는 사용할 프로젝트, `<Mixdog 데이터 폴더>`는 사용 중인 Mixdog의 데이터 위치입니다.
 
 | 호스트 | 설치할 폴더 (범위 하나만 선택) | 새 세션에서 확인 |
 | --- | --- | --- |
@@ -41,7 +43,7 @@ README와 [평가 사례](docs/evaluation.md)는 저장소 이용자를 위한 �
 
 복사한 경로 바로 아래에 `SKILL.md`, `references/`, `agents/`가 있어야 합니다. 기존 동명 스킬이 있으면 덮어쓰기 전에 내용을 비교하세요. 저장소를 복제하는 것만으로 각 호스트에 설치되지는 않습니다. 별도 플러그인이나 패키지 설치는 필요하지 않습니다.
 
-일상적인 요청에는 이름을 붙이지 않아도 됩니다. Codex는 `description`을, Mixdog는 `when_to_use`를 스킬 선택에 사용합니다. Claude Code는 스킬 목록에서 `description` 뒤에 `when_to_use`를 붙이므로 어느 한 필드를 수정할 때도 두 문장을 함께 읽어 보세요. [Claude Code 필드 설명](https://code.claude.com/docs/en/skills#frontmatter-reference)
+일상적인 요청에는 이름을 붙이지 않아도 됩니다. Codex와 Claude Code는 표준 원본의 `description`으로 스킬을 선택합니다. Mixdog가 모델에 보여 주는 선택 문구는 ZIP의 `SKILL.md` 최상위 `when_to_use`에 들어 있습니다. [Claude Code 필드 설명](https://code.claude.com/docs/en/skills#frontmatter-reference) · [Mixdog 스킬 목록 형식](https://github.com/tribgames/mixdog/blob/8382c929c3d7ae5c6692136c67c63be821838bc0/src/defaults/skills/skill-creator/references/design.md#listing-line)
 
 자동 선택 여부는 이름을 생략한 요청으로 확인합니다. 아래 예시는 세 호스트에서 모두 사용할 수 있습니다.
 

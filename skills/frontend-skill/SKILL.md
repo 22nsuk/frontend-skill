@@ -1,7 +1,6 @@
 ---
 name: frontend-skill
-description: Design or review web UIs, dashboards and reports, including small layout, spacing and type changes.
-when_to_use: Design, review or adjust UI layout, spacing or type on pages, charts and reports; not backend work.
+description: Design or review web UIs, dashboards and reports. Adjust spacing or type. Skip backend-only work.
 ---
 
 # Frontend Skill
