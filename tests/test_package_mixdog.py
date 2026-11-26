@@ -8,39 +8,16 @@ from zipfile import ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ARCHIVE_PATH = "packages/frontend-skill-mixdog.zip"
 
 
 class ShippedMixdogPackageTest(unittest.TestCase):
     def test_shipped_zip_matches_staged_sources(self):
-        archive_path = Path("packages/frontend-skill-mixdog.zip")
-        shipped = ROOT / archive_path
-        self.assertTrue(shipped.is_file(), f"Missing shipped package: {archive_path}")
-        expected = shipped.read_bytes()
-
-        with TemporaryDirectory() as tmp:
-            checkout = Path(tmp)
-            # Rebuild a copy of the index without changing this checkout's index or ZIP.
-            subprocess.run(
-                ["git", "checkout-index", "--all", f"--prefix={checkout.as_posix()}/"],
-                cwd=ROOT, check=True,
-            )
-            subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
-            subprocess.run(
-                ["git", "add", "--force", "--", ".gitattributes", "scripts", "skills"],
-                cwd=checkout, check=True,
-            )
-            script = checkout / "scripts/package-mixdog.py"
-            # Preserve the generator's refusal to run unstaged script changes.
-            copy2(ROOT / "scripts/package-mixdog.py", script)
-            rebuilt = subprocess.run(
-                [sys.executable, str(script)], cwd=checkout,
-                capture_output=True, text=True,
-            )
-            self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
-            self.assertEqual(
-                expected, (checkout / archive_path).read_bytes(),
-                "Shipped ZIP differs from staged sources; run python scripts/package-mixdog.py",
-            )
+        result = subprocess.run(
+            [sys.executable, "scripts/package-mixdog.py", "--check"], cwd=ROOT,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class MixdogPackageTest(unittest.TestCase):
@@ -58,13 +35,32 @@ class MixdogPackageTest(unittest.TestCase):
         (self.root / ".gitattributes").write_bytes(b"* text=auto eol=lf\n")
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
         subprocess.run(["git", "add", "--", ".gitattributes", "scripts", "skills"], cwd=self.root, check=True)
-        self.archive = self.root / "packages/frontend-skill-mixdog.zip"
+        self.archive = self.root / ARCHIVE_PATH
 
-    def build(self, *, check=True):
+    def build(self, *args, check=True):
         return subprocess.run(
-            [sys.executable, str(self.script)], cwd=self.root,
+            [sys.executable, str(self.script), *args], cwd=self.root,
             check=check, capture_output=True, text=True,
         )
+
+    def test_check_uses_staged_zip_even_when_worktree_has_a_different_copy(self):
+        self.build()
+        missing = self.build("--check", check=False)
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("Missing staged ZIP", missing.stderr)
+
+        subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+        (self.skill / "reference.md").write_bytes(b"Updated reference.\n")
+        subprocess.run(["git", "add", "--", "skills/frontend-skill/reference.md"], cwd=self.root, check=True)
+        self.build()
+        stale = self.build("--check", check=False)
+        self.assertNotEqual(stale.returncode, 0)
+        self.assertIn("Staged ZIP differs", stale.stderr)
+
+        subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+        self.archive.write_bytes(b"Unstaged changes.\n")
+        self.build("--check")
+        self.assertEqual(self.archive.read_bytes(), b"Unstaged changes.\n")
 
     def test_ship_index_contents_not_worktree_edits(self):
         self.build()

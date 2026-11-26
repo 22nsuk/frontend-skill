@@ -9,8 +9,6 @@ function httpError(status) {
   return error;
 }
 
-const noWait = () => Promise.resolve();
-
 // Each pair gives the HTTP status and the number of failures before recovery.
 const recoveryCases = [
   [408, 1],
@@ -21,55 +19,76 @@ const recoveryCases = [
   [504, 1],
 ];
 
-async function expectRecovery(status, failuresBeforeSuccess) {
-  let calls = 0;
-  const result = await withRetry(async () => {
-    calls += 1;
-    if (calls <= failuresBeforeSuccess) throw httpError(status);
+function simulateRequest(status, failuresBeforeSuccess, attempts) {
+  const steps = [];
+  const errors = [];
+  const options = {
+    wait: async (attempt) => {
+      // Observe wait completion on a later turn of the event loop.
+      await new Promise((resolve) => setImmediate(resolve));
+      steps.push(`wait ${attempt}`);
+    },
+  };
+  if (attempts !== undefined) options.attempts = attempts;
+  const result = withRetry(async (attempt) => {
+    steps.push(`call ${attempt}`);
+    if (errors.length < failuresBeforeSuccess) {
+      const error = httpError(status);
+      errors.push(error);
+      throw error;
+    }
     return 'ok';
-  }, { wait: noWait });
-  assert.equal(result, 'ok');
-  assert.equal(calls, failuresBeforeSuccess + 1);
+  }, options);
+  return { result, steps, errors };
+}
+
+function expectedSteps(calls) {
+  const steps = ['call 0'];
+  for (let attempt = 1; attempt < calls; attempt += 1) {
+    steps.push(`wait ${attempt - 1}`, `call ${attempt}`);
+  }
+  return steps;
+}
+
+async function expectRecovery(status, failuresBeforeSuccess) {
+  const { result, steps } = simulateRequest(status, failuresBeforeSuccess);
+  assert.equal(await result, 'ok');
+  assert.deepEqual(steps, expectedSteps(failuresBeforeSuccess + 1));
+}
+
+async function expectExhaustion(attempts) {
+  const expectedCalls = attempts ?? 3;
+  const { result, steps, errors } = simulateRequest(503, expectedCalls, attempts);
+  await assert.rejects(result, (error) => error === errors[expectedCalls - 1]);
+  assert.deepEqual(steps, expectedSteps(expectedCalls));
+}
+
+async function expectRejectedClientErrors() {
+  const retryable = new Set(recoveryCases.map(([status]) => status));
+  for (let status = 400; status < 500; status += 1) {
+    if (retryable.has(status)) continue;
+    const { result, steps, errors } = simulateRequest(status, 1);
+    await assert.rejects(result, (error) => error === errors[0], `HTTP ${status} must reject immediately`);
+    assert.deepEqual(steps, ['call 0'], `HTTP ${status} must not wait or retry`);
+  }
 }
 
 const tests = [
-  ['returns the first successful result', async () => {
-    let calls = 0;
-    const result = await withRetry(async () => {
-      calls += 1;
-      return 'ok';
-    }, { wait: noWait });
-    assert.equal(result, 'ok');
-    assert.equal(calls, 1);
-  }],
+  ['returns the first successful result', () => expectRecovery(503, 0)],
   ...recoveryCases.map(([status, failuresBeforeSuccess]) => [
     `recovers after HTTP ${status}`,
     () => expectRecovery(status, failuresBeforeSuccess),
   ]),
-  ['honors attempts: 1 for persistent HTTP 503', async () => {
-    let calls = 0;
-    let waits = 0;
-    const originalError = httpError(503);
-    await assert.rejects(withRetry(async () => {
-      calls += 1;
-      throw originalError;
-    }, {
-      attempts: 1,
-      wait: async () => { waits += 1; },
-    }), (error) => error === originalError);
-    assert.equal(calls, 1, 'attempts: 1 must call the operation exactly once');
-    assert.equal(waits, 0, 'attempts: 1 must not wait after exhausting the retry budget');
-  }],
-  ...[400, 404].map((status) => [`does not retry a rejected request (${status})`, async () => {
-    let calls = 0;
-    await assert.rejects(withRetry(async () => {
-      calls += 1;
-      throw httpError(status);
-    }, { wait: noWait }), { status });
-    assert.equal(calls, 1);
-  }]),
+  ['uses three attempts by default for persistent HTTP 503', () => expectExhaustion()],
+  ...[1, 3, 4].map((attempts) => [
+    `honors attempts: ${attempts} for persistent HTTP 503`,
+    () => expectExhaustion(attempts),
+  ]),
+  ['rejects every non-retryable 4xx without waiting', expectRejectedClientErrors],
 ];
 
+// An unresolved promise can let Node exit before the suite finishes.
+process.exitCode = 1;
 (async () => {
   let failed = 0;
   for (const [name, run] of tests) {

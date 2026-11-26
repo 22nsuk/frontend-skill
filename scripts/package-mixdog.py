@@ -1,9 +1,10 @@
-"""Build the Mixdog installation ZIP from the standard frontend-skill folder."""
+"""Build or verify the Mixdog ZIP using the staged frontend-skill files."""
 
+import argparse
 import json
 from pathlib import Path
 from subprocess import check_output, run
-from tempfile import NamedTemporaryFile
+from tempfile import TemporaryDirectory
 from zipfile import ZipFile, ZipInfo
 
 
@@ -23,7 +24,19 @@ def mixdog_manifest(document: bytes) -> bytes:
     return opening + newline + b"when_to_use: " + trigger + line_ending + rest
 
 
-def build() -> None:
+def check_staged_zip(tree: str, rebuilt: Path) -> None:
+    archive_path = OUTPUT.relative_to(ROOT).as_posix()
+    staged = run(["git", "cat-file", "blob", f"{tree}:{archive_path}"], cwd=ROOT, capture_output=True)
+    if staged.returncode:
+        raise SystemExit(f"Missing staged ZIP: git add -- {archive_path}")
+    if staged.stdout != rebuilt.read_bytes():
+        raise SystemExit(
+            "Staged ZIP differs from staged sources. "
+            f"Run python scripts/package-mixdog.py, then git add -- {archive_path}"
+        )
+
+
+def build(*, check_only: bool = False) -> None:
     tree = check_output(["git", "write-tree"], cwd=ROOT).decode().strip()
     script_path = SCRIPT.relative_to(ROOT).as_posix()
     staged_script = run(
@@ -44,11 +57,12 @@ def build() -> None:
         files[name] = oid
     if "SKILL.md" not in files:
         raise ValueError("The standard SKILL.md must be in the Git index")
-    OUTPUT.parent.mkdir(exist_ok=True)
-    with NamedTemporaryFile(dir=OUTPUT.parent, suffix=".zip", delete=False) as temp:
-        staged = Path(temp.name)
-    try:
-        with ZipFile(staged, "w") as archive:
+    if not check_only:
+        OUTPUT.parent.mkdir(exist_ok=True)
+    # Build beside the destination for atomic replacement, or outside the checkout for a check.
+    with TemporaryDirectory(dir=None if check_only else OUTPUT.parent) as tmp:
+        rebuilt = Path(tmp) / OUTPUT.name
+        with ZipFile(rebuilt, "w") as archive:
             # Git order and fixed ZIP metadata keep builds identical across checkouts.
             for name, oid in files.items():
                 entry = ZipInfo(f"{SOURCE.name}/{name}")
@@ -58,11 +72,15 @@ def build() -> None:
                 if name == "SKILL.md":
                     data = mixdog_manifest(data)
                 archive.writestr(entry, data)
-        staged.replace(OUTPUT)
-    finally:
-        staged.unlink(missing_ok=True)
+        if check_only:
+            check_staged_zip(tree, rebuilt)
+            print("Staged ZIP matches staged sources.")
+            return
+        rebuilt.replace(OUTPUT)
     print(OUTPUT.relative_to(ROOT).as_posix())
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="Verify the staged ZIP without replacing it.")
+    build(check_only=parser.parse_args().check)
