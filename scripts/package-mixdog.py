@@ -12,7 +12,7 @@ SCRIPT = Path(__file__).resolve()
 ROOT = SCRIPT.parents[1]
 SOURCE = ROOT / "skills" / "frontend-skill"
 OUTPUT = ROOT / "packages" / "frontend-skill-mixdog.zip"
-TRIGGER = "Design, review or adjust UI layout, spacing or type on pages, charts and reports; not backend work."
+TRIGGER = "Design or review pages, UIs, charts or reports; not backend."
 
 
 def mixdog_manifest(document: bytes) -> bytes:

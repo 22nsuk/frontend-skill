@@ -18,9 +18,35 @@ test('refuses to serve without an explicit workspace directory', () => {
   }
 });
 
+test('rejects invalid options before serving the workspace', () => {
+  const cases = [
+    [['--port', '0', '--stats', '503'], /--stats/],
+    [['--status'], /--status/],
+    [['--status', '--delay', '0'], /--status/],
+    [['--delay', 'two-seconds'], /--delay/],
+    [['--delay=-1'], /--delay/],
+    [['--delay=2147483648'], /--delay/],
+    [['--status=503.5'], /--status/],
+    [['--status=199'], /--status/],
+    [['--status=600'], /--status/],
+    [['--port=65536'], /--port/],
+    [['--status', '201', '--status=503'], /--status/],
+    [['extra'], /extra/],
+  ];
+  for (const [args, diagnostic] of cases) {
+    const result = spawnSync(process.execPath, [script, fixture, ...args], { encoding: 'utf8', timeout: 3000 });
+    assert.equal(result.status, 1, `expected ${args.join(' ')} to fail before listening`);
+    assert.match(result.stderr, diagnostic);
+    assert.doesNotMatch(result.stdout, /serving /);
+  }
+});
+
 for (const status of [201, 503]) {
   test(`only valid JSON bookings receive the configured ${status} response`, { timeout: 8000 }, async (t) => {
-    const server = spawn(process.execPath, [script, fixture, '--port', '0', '--delay', '0', '--status', String(status)]);
+    const options = status === 201
+      ? ['--port', '0', '--delay', '0', '--status', String(status)]
+      : ['--port=0', '--delay=0', `--status=${status}`];
+    const server = spawn(process.execPath, [script, fixture, ...options]);
     const lines = createInterface({ input: server.stdout });
     t.after(() => { lines.close(); server.kill(); });
     const [ready] = await once(lines, 'line');

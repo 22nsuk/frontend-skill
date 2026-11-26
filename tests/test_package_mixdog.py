@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import unittest
@@ -42,6 +43,16 @@ class MixdogPackageTest(unittest.TestCase):
             [sys.executable, str(self.script), *args], cwd=self.root,
             check=check, capture_output=True, text=True,
         )
+
+    def test_trigger_remains_visible_in_a_crowded_mixdog_listing(self):
+        self.build()
+        with ZipFile(self.archive) as archive:
+            manifest = archive.read("frontend-skill/SKILL.md").decode("utf-8")
+        frontmatter = manifest.split("---", 2)[1].splitlines()
+        [value] = [line.split(":", 1)[1] for line in frontmatter if line.startswith("when_to_use:")]
+        trigger = json.loads(value)
+        self.assertTrue(trigger.strip())
+        self.assertLessEqual(len(trigger), 60, "Mixdog can shorten each listing to 60 characters")
 
     def test_check_uses_staged_zip_even_when_worktree_has_a_different_copy(self):
         self.build()

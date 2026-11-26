@@ -11,19 +11,38 @@ const path = require('node:path');
 
 const args = process.argv.slice(2);
 const workspace = args[0];
-if (!workspace?.trim() || workspace.startsWith('--') ||
-    !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
-  console.error('Expected an existing workspace directory. Usage: node docs/eval-stub-server.js <workspace> [--status N] [--delay MS] [--port N]');
+function usageError(message) {
+  console.error(`${message}\nUsage: node docs/eval-stub-server.js <workspace> [--status N] [--delay MS] [--port N]`);
   process.exit(1);
 }
+if (!workspace?.trim() || workspace.startsWith('--') ||
+    !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
+  usageError('Expected an existing workspace directory.');
+}
 const root = path.resolve(workspace);
-const option = (name, fallback) => {
-  const index = args.indexOf(`--${name}`);
-  return index === -1 ? fallback : Number(args[index + 1]);
-};
-const status = option('status', 201);
-const delay = option('delay', 2000);
-const port = option('port', 47613);
+const limits = new Map([
+  ['--status', [200, 599]],
+  ['--delay', [0, 2147483647]],
+  ['--port', [0, 65535]],
+]);
+const options = new Map();
+for (let i = 1; i < args.length; i++) {
+  const arg = args[i];
+  const equals = arg.indexOf('=');
+  const flag = equals === -1 ? arg : arg.slice(0, equals);
+  if (!limits.has(flag)) usageError(`Unknown argument: ${arg}`);
+  if (options.has(flag)) usageError(`Duplicate option: ${flag}`);
+  const raw = equals === -1 ? args[++i] : arg.slice(equals + 1);
+  const value = Number(raw);
+  const [min, max] = limits.get(flag);
+  if (!/^\d+$/.test(raw ?? '') || value < min || value > max) {
+    usageError(`${flag} expects an integer from ${min} to ${max}.`);
+  }
+  options.set(flag, value);
+}
+const status = options.get('--status') ?? 201;
+const delay = options.get('--delay') ?? 2000;
+const port = options.get('--port') ?? 47613;
 
 const types = {
   '.html': 'text/html; charset=utf-8',
