@@ -26,7 +26,7 @@ Ask only when a missing decision would materially change the permitted outcome a
 
 For a new design or substantial redesign, make three decisions before detailed styling: what should receive attention first, what character suits the subject and audience, and which concrete visual choices will express it. Share this briefly when it helps the user steer the work; do not require a planning artifact for every change.
 
-For example, a local repair service could use close photographs of tools and repairs, sturdy headings, and compact appointment information. A research reading page might use generous paragraph rhythm, restrained annotation, and clearly separated figures. These are illustrations of reasoning, not templates to repeat.
+For example, readers choosing a performance by date may need a scannable schedule before they need a large production photograph. A reader interpreting a research finding may need the figure and its qualification together before the methods. Let the material determine which relationship deserves emphasis.
 
 Make the direction specific enough to guide a choice of proportion, type, image, or emphasis. Generic adjectives alone are insufficient. Retain the direction already established by the project when it serves the task. A small correction can proceed without inventing a new visual identity.
 
@@ -46,7 +46,7 @@ Make the direction specific enough to guide a choice of proportion, type, image,
 
 ## Select only the needed detail
 
-Before working on a specialized concern, read the relevant part of the reference below. Selection follows the information or behavior being changed, not the page's label. A marketing page with a comparison chart can need two references; a spacing fix may need none. Do not load the entire collection by default.
+Read only the reference sections that cover the information or behavior the user wants assessed or changed. A comparison chart on a public page and a filter on a report may each draw on two references. A spacing fix may need none.
 
 | Changed concern | Reference |
 | --- | --- |
@@ -70,7 +70,7 @@ Select checks by what changed:
 - Media or motion: inspect meaningful states, reduced-motion behavior when affected, and a useful result when a required resource or effect is unavailable.
 - Data presentation or output: check the displayed meaning against the source and inspect the requested reading or export path.
 
-Compare before and after with the same content and state when that comparison supports the decision. Distinguish observed faults from optional aesthetic changes. A static check or visual inspection proves only what it examined.
+Open the result the way its audience will receive it. For a new design or redesign, follow the intended reading order on the rendered result. Can the reader find the main point, the evidence or condition that qualifies it, and the next action if one is needed? For a targeted edit, exercise the affected task at the width or state that prompted the change. Compare with the original under the same conditions when useful. Distinguish observed faults from aesthetic preferences.
 
 For a **review**, stop after reporting each material finding, its evidence, and the recommended change. Do not apply fixes or change files or settings. For **implementation**, correct in-scope failures, recheck the affected result, and deliver the artifact with the important changes and preserved behavior. Flag out-of-scope faults instead of fixing them.
 

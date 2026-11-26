@@ -29,6 +29,6 @@ Use this reference when an edit affects input, navigation, retained state, submi
 
 ## Check the changed behavior
 
-Use the project's current tools to exercise affected paths, relevant state transitions, keyboard operation, and nearby regressions. Validate only what the change puts at risk; do not add unrelated features or install tooling to satisfy a checklist.
+When a submission changes, try its established keyboard and pointer paths with valid input. Check that client-side validation still blocks the inputs it previously rejected and that server-side errors reach the user. Compare the test request's method, destination, encoding, and field values with the existing contract. For a navigation layout change, activate the destination at the affected width using the available menu or scrolling interaction.
 
 For an illustrative product preview, make simulated behavior and sample data clear. Inspect its presentation and any implemented interactions, but do not treat a convincing mockup as evidence of persistence, permissions, or service integration.

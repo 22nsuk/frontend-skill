@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>여울도서관 분관 운영 보고서</title>
+  <style>
+    body { margin: 0; font: 1rem/1.6 system-ui, sans-serif; }
+    main { width: 52rem; margin: auto; padding: 1rem; }
+    table { border-collapse: collapse; }
+    th, td { padding: 0.5rem 1rem; border: 1px solid #aaa; }
+    @media print {
+      .filter, .notes { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>여울도서관 분관 운영 보고서</h1>
+    <p>2025년 2분기 운영회의 자료 · 가상 도서관의 예시 집계</p>
+    <p>다음 분기 운영일을 논의하기 위해 두 분관의 월별 방문 건수를 비교합니다. 한 사람이 여러 번 방문하면 방문할 때마다 한 건으로 셉니다.</p>
+    <p class="filter">
+      <label for="branch">분관 선택</label>
+      <select id="branch">
+        <option value="">전체 분관</option>
+        <option>마루</option>
+        <option>솔빛</option>
+      </select>
+    </p>
+    <table>
+      <caption>분관별 방문 건수 (건)</caption>
+      <thead><tr><th scope="col">분관</th><th scope="col">4월</th><th scope="col">5월</th><th scope="col">6월</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">마루</th><td>1,200</td><td>1,080</td><td>1,320</td></tr>
+        <tr><th scope="row">솔빛</th><td>900</td><td>600</td><td>960</td></tr>
+      </tbody>
+    </table>
+    <section class="notes">
+      <h2>집계 조건과 출처</h2>
+      <p>솔빛 분관은 5월에 서가 교체로 10일간 휴관했습니다. 운영일 수가 달라 월 합계만으로 방문 수요의 변화를 판단하기 어렵습니다.</p>
+      <p>출처 · 여울도서관 <a href="visits.csv">분관별 월간 집계표</a></p>
+    </section>
+  </main>
+  <script>
+    document.querySelector('#branch').addEventListener('change', (event) => {
+      for (const row of document.querySelectorAll('tbody tr')) {
+        row.hidden = Boolean(event.target.value) && row.cells[0].textContent !== event.target.value;
+      }
+    });
+  </script>
+</body>
+</html>

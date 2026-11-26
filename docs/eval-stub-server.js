@@ -10,7 +10,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const args = process.argv.slice(2);
-const root = path.resolve(args[0] || '.');
+const workspace = args[0];
+if (!workspace?.trim() || workspace.startsWith('--') ||
+    !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
+  console.error('Expected an existing workspace directory. Usage: node docs/eval-stub-server.js <workspace> [--status N] [--delay MS] [--port N]');
+  process.exit(1);
+}
+const root = path.resolve(workspace);
 const option = (name, fallback) => {
   const index = args.indexOf(`--${name}`);
   return index === -1 ? fallback : Number(args[index + 1]);
@@ -30,20 +36,48 @@ const types = {
 };
 let bookings = 0;
 
+function handleBooking(req, res) {
+  const n = ++bookings;
+  console.log(`#${n} POST /api/bookings`);
+  function respond(code, payload) {
+    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(payload));
+    console.log(`#${n} responded ${code}`);
+  }
+
+  const mediaType = req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase();
+  if (mediaType !== 'application/json') {
+    req.resume();
+    respond(415, { error: 'Expected application/json' });
+    return;
+  }
+  const chunks = [];
+  const limit = 64 * 1024;
+  let bytes = 0;
+  req.on('data', (chunk) => {
+    bytes += chunk.length;
+    if (bytes <= limit) chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (bytes > limit) return respond(413, { error: 'Booking body too large' });
+    let payload;
+    try {
+      payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      return respond(400, { error: 'Invalid JSON' });
+    }
+    if (!['name', 'phone', 'date'].every((key) => typeof payload?.[key] === 'string' && payload[key].length > 0)) {
+      return respond(400, { error: 'Expected name, phone and date as nonempty strings' });
+    }
+    setTimeout(() => respond(status, status < 400 ? { id: `stub-${n}` } : { error: 'stub failure' }), delay);
+  });
+}
+
 http.createServer((req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
 
   if (req.method === 'POST' && url.pathname === '/api/bookings') {
-    req.resume();
-    req.on('end', () => {
-      const n = ++bookings;
-      console.log(`#${n} POST /api/bookings`);
-      setTimeout(() => {
-        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify(status < 400 ? { id: `stub-${n}` } : { error: 'stub failure' }));
-        console.log(`#${n} responded ${status}`);
-      }, delay);
-    });
+    handleBooking(req, res);
     return;
   }
 
@@ -72,6 +106,6 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' });
     res.end(req.method === 'HEAD' ? undefined : data);
   });
-}).listen(port, '127.0.0.1', () => {
-  console.log(`serving ${root} at http://127.0.0.1:${port}/ (POST /api/bookings -> ${status} after ${delay} ms)`);
+}).listen(port, '127.0.0.1', function () {
+  console.log(`serving ${root} at http://127.0.0.1:${this.address().port}/ (POST /api/bookings -> ${status} after ${delay} ms)`);
 });
