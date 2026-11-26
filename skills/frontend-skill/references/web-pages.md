@@ -12,11 +12,11 @@ Use section boundaries to mark a change of question or subject. Remove repeated 
 
 ## Make the subject visible
 
-Choose media that helps visitors recognize the actual offering, process, place, or result. A software demonstration should show the activity being explained, with readable content at its intended display size. A static illustration of an interface must not suggest that its controls work.
+Make the offering, work, or useful result recognizable in the main presentation, with enough space and detail to understand it. A software demonstration should show the activity being explained at a readable size; a collection of generic panels is not a substitute for that activity. Supporting details should develop the subject. A static illustration of an interface must not suggest that its controls work.
 
 Use supplied assets when they are suitable. Before adding new imagery, consider whether a clearer arrangement of existing material would serve better. Keep illustrative or proposed content distinguishable from a photograph of a real customer's premises, a real result, or a verified endorsement. Retain helpful captions, source information, and accessible alternatives.
 
-Decide the visual character through coherent choices in composition, typography, and imagery. It can be energetic, formal, tactile, or understated as the subject requires. Do not manufacture a logo, effect, or decorative object merely to satisfy a uniqueness test.
+For an expressive page, develop a memorable treatment around material that matters: a revealing detail, transformation, useful comparison, or step in the work. It can be a still composition or a genuine interaction. Let its typography, framing, and behavior share a recognizable idea with the rest of the page. Give it enough prominence to be experienced, with quieter surroundings. Motion is useful when its change reveals that idea; essential content and actions must remain available without the effect. An existing identity, compact explanation, or bounded edit may need no new treatment. Respect supplied brand assets and do not invent facts to furnish the scene.
 
 ## Make actions trustworthy
 
