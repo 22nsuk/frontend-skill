@@ -46,6 +46,20 @@ const tests = [
     `recovers after HTTP ${status}`,
     () => expectRecovery(status, failuresBeforeSuccess),
   ]),
+  ['honors attempts: 1 for persistent HTTP 503', async () => {
+    let calls = 0;
+    let waits = 0;
+    const originalError = httpError(503);
+    await assert.rejects(withRetry(async () => {
+      calls += 1;
+      throw originalError;
+    }, {
+      attempts: 1,
+      wait: async () => { waits += 1; },
+    }), (error) => error === originalError);
+    assert.equal(calls, 1, 'attempts: 1 must call the operation exactly once');
+    assert.equal(waits, 0, 'attempts: 1 must not wait after exhausting the retry budget');
+  }],
   ...[400, 404].map((status) => [`does not retry a rejected request (${status})`, async () => {
     let calls = 0;
     await assert.rejects(withRetry(async () => {

@@ -66,7 +66,8 @@ Select checks by what changed:
 
 - Layout or type: inspect useful wide and narrow views, a reflow boundary, and unusually long content where relevant. Check reading order, clipping, overlap, and access to full information.
 - Interactive elements: exercise the affected pointer and keyboard path, focus visibility and movement, and relevant non-success states. A screenshot does not establish working behavior.
-- Color, media, or motion: inspect meaningful states, reduced-motion behavior when affected, and a useful result when a required resource or effect is unavailable.
+- Text or background colors: when either changes, measure the affected foreground/background pairs in their rendered states, accounting for transparency and image or gradient backgrounds. Meet [WCAG AA text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum): at least 4.5:1 for normal text or 3:1 for large text (at least 18 pt, or at least 14 pt bold, with equivalent sizes for CJK fonts). Identify logotype text and inactive-control text as exceptions; a muted active control is not exempt. Do not round a failing ratio up to pass.
+- Media or motion: inspect meaningful states, reduced-motion behavior when affected, and a useful result when a required resource or effect is unavailable.
 - Data presentation or output: check the displayed meaning against the source and inspect the requested reading or export path.
 
 Compare before and after with the same content and state when that comparison supports the decision. Distinguish observed faults from optional aesthetic changes. A static check or visual inspection proves only what it examined.

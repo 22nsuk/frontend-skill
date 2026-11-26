@@ -7,6 +7,42 @@ from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class ShippedMixdogPackageTest(unittest.TestCase):
+    def test_shipped_zip_matches_staged_sources(self):
+        archive_path = Path("packages/frontend-skill-mixdog.zip")
+        shipped = ROOT / archive_path
+        self.assertTrue(shipped.is_file(), f"Missing shipped package: {archive_path}")
+        expected = shipped.read_bytes()
+
+        with TemporaryDirectory() as tmp:
+            checkout = Path(tmp)
+            # Rebuild a copy of the index without changing this checkout's index or ZIP.
+            subprocess.run(
+                ["git", "checkout-index", "--all", f"--prefix={checkout.as_posix()}/"],
+                cwd=ROOT, check=True,
+            )
+            subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+            subprocess.run(
+                ["git", "add", "--force", "--", ".gitattributes", "scripts", "skills"],
+                cwd=checkout, check=True,
+            )
+            script = checkout / "scripts/package-mixdog.py"
+            # Preserve the generator's refusal to run unstaged script changes.
+            copy2(ROOT / "scripts/package-mixdog.py", script)
+            rebuilt = subprocess.run(
+                [sys.executable, str(script)], cwd=checkout,
+                capture_output=True, text=True,
+            )
+            self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
+            self.assertEqual(
+                expected, (checkout / archive_path).read_bytes(),
+                "Shipped ZIP differs from staged sources; run python scripts/package-mixdog.py",
+            )
+
+
 class MixdogPackageTest(unittest.TestCase):
     def setUp(self):
         tmp = TemporaryDirectory()
@@ -14,7 +50,7 @@ class MixdogPackageTest(unittest.TestCase):
         self.root = Path(tmp.name)
         self.script = self.root / "scripts/package-mixdog.py"
         self.script.parent.mkdir()
-        copy2(Path(__file__).resolve().parents[1] / "scripts/package-mixdog.py", self.script)
+        copy2(ROOT / "scripts/package-mixdog.py", self.script)
         self.skill = self.root / "skills/frontend-skill"
         self.skill.mkdir(parents=True)
         (self.skill / "SKILL.md").write_bytes(b"---\nname: frontend-skill\ndescription: Example\n---\n\nOriginal body.\n")
