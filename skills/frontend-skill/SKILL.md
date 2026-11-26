@@ -1,7 +1,7 @@
 ---
 name: frontend-skill
-description: >-
-  Design and improve web interfaces with deliberate visual hierarchy and a character suited to their audience. Use for new page or screen design, UI polish, visual reviews, layout and typography changes, and presentation of reports or dashboards. Covers both small refinements and substantial redesigns. Skip work confined to backend logic, data retrieval, or nonvisual maintenance.
+description: Design or review web UIs, dashboards and reports, including small layout, spacing and type changes.
+when_to_use: Design, review or adjust UI layout, spacing or type on pages, charts and reports; not backend work.
 ---
 
 # Frontend Skill
@@ -10,7 +10,7 @@ Make the important content and actions easy to recognize, with an expressive app
 
 ## Establish the working boundary
 
-Identify the audience, the task they need to complete, the available material, and the requested deliverable. Reuse decisions already supplied. For an existing interface, inspect the affected implementation and, when available, the rendered view before deciding what needs attention. Distinguish a design problem from an unresolved data or application problem.
+Identify the audience, the task they need to complete, the available material, and the requested deliverable. Reuse decisions already supplied. For an existing interface, inspect the affected implementation and, when available, the rendered view before deciding what needs attention. If the request is confined to backend logic, data retrieval, or nonvisual maintenance, skip this design workflow.
 
 Choose the extent of work from the request and evidence:
 
@@ -61,7 +61,9 @@ These references refine the common guidance for the affected work. They do not a
 
 Work with the existing framework, components, assets, and delivery environment. Keep functional wiring intact. Share repeated design decisions through the project's established mechanisms rather than layering unrelated overrides. Add dependencies only when their contribution and maintenance cost make sense for this task; this skill requires no particular framework, asset collection, browser runner, or installation.
 
-Use the tools that are available to inspect the relevant result. Select checks by what changed:
+Use the tools that are available to inspect the relevant result. For a review, use read-only inspection. To verify a submission, booking, purchase, or other action with external effects, use a confirmed sandbox or local mock with test data. On a live or unknown system, stop before the first action that can change real state or send data; report where verification stopped. A mock result is not evidence of a live integration.
+
+Select checks by what changed:
 
 - Layout or type: inspect useful wide and narrow views, a reflow boundary, and unusually long content where relevant. Check reading order, clipping, overlap, and access to full information.
 - Interactive elements: exercise the affected pointer and keyboard path, focus visibility and movement, and relevant non-success states. A screenshot does not establish working behavior.
@@ -70,6 +72,6 @@ Use the tools that are available to inspect the relevant result. Select checks b
 
 Compare before and after with the same content and state when that comparison supports the decision. Distinguish observed faults from optional aesthetic changes. A static check or visual inspection proves only what it examined.
 
-Correct content errors and failures that prevent the required reading or action, then recheck the affected result. Finish once the relevant obligations are met; repeat work only for a concrete remaining issue or new change. Do not keep revising for marginal ornament. If a check is unavailable, state the limitation and use an appropriate available alternative without calling the missing check passed.
+For a **review**, stop after reporting each material finding, its evidence, and the recommended change. Do not apply fixes or change files or settings. For **implementation**, correct in-scope failures, recheck the affected result, and deliver the artifact with the important changes and preserved behavior. Flag out-of-scope faults instead of fixing them.
 
-Deliver the requested artifact or review with the important changes, preserved behavior, checks performed, and material limits. Keep production notes out of the interface unless its audience needs them.
+In either mode, distinguish checks performed from checks unavailable. Report material limits without calling a missing check passed. Do not keep revising for marginal ornament or put production notes in the interface.
