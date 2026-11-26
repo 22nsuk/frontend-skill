@@ -24,6 +24,7 @@ Use this reference when an edit affects input, navigation, retained state, submi
 
 - Cover the states the affected path can actually reach: loading, empty, stale, error, success, and cancellation. Separate an empty result from a failed request and distinguish retained data from refreshed data when freshness matters.
 - Show success only after the operation's real completion condition. Preserve useful input on failure, provide the available recovery action, and prevent accidental repeated submission while a request is pending.
+- When progress, success, or error text changes without moving focus, expose the change to assistive technology. Check the updated text and its live-region semantics or equivalent notification. Distinguish inspection of these properties from a test with a screen reader.
 - Keep displayed and effective values aligned, including defaults, filters, units, selected items, and disabled choices. A visible cancellation control must have a defined effect; do not imply that it reverses completed work.
 
 ## Check the changed behavior
