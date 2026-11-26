@@ -35,14 +35,14 @@ const tests = [
   ['retries a temporary server error (503)', () => expectRecovery(503, 2)],
   ['retries a request timeout (408)', () => expectRecovery(408, 1)],
   ['retries a rate-limited request (429)', () => expectRecovery(429, 1)],
-  ['does not retry a rejected request', async () => {
+  ...[400, 404].map((status) => [`does not retry a rejected request (${status})`, async () => {
     let calls = 0;
     await assert.rejects(withRetry(async () => {
       calls += 1;
-      throw httpError(400);
-    }, { wait: noWait }), { status: 400 });
+      throw httpError(status);
+    }, { wait: noWait }), { status });
     assert.equal(calls, 1);
-  }],
+  }]),
 ];
 
 (async () => {

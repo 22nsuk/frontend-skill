@@ -23,22 +23,31 @@ def mixdog_manifest(document: bytes) -> bytes:
 
 
 def build() -> None:
-    tracked = check_output(["git", "ls-files", "-z", "--", "."], cwd=SOURCE)
-    files = tracked.decode("utf-8").split("\0")[:-1]
+    prefix = SOURCE.relative_to(ROOT).as_posix() + "/"
+    tree = check_output(["git", "write-tree", f"--prefix={prefix}"], cwd=ROOT).decode().strip()
+    tracked = check_output(["git", "ls-tree", "-r", "-z", tree], cwd=ROOT)
+    files = {}
+    for record in tracked.decode("utf-8").split("\0")[:-1]:
+        header, name = record.split("\t", 1)
+        mode, _, oid = header.split()
+        if mode not in {"100644", "100755"}:
+            raise ValueError(f"Expected a regular skill file: {name}")
+        files[name] = oid
     if "SKILL.md" not in files:
-        raise ValueError("The standard SKILL.md must be tracked by Git")
-    adapted = mixdog_manifest((SOURCE / "SKILL.md").read_bytes())
+        raise ValueError("The standard SKILL.md must be in the Git index")
     OUTPUT.parent.mkdir(exist_ok=True)
     with NamedTemporaryFile(dir=OUTPUT.parent, suffix=".zip", delete=False) as temp:
         staged = Path(temp.name)
     try:
         with ZipFile(staged, "w") as archive:
             # Git order and fixed ZIP metadata keep builds identical across checkouts.
-            for name in files:
+            for name, oid in files.items():
                 entry = ZipInfo(f"{SOURCE.name}/{name}")
                 entry.create_system = 3
                 entry.external_attr = 0o100644 << 16
-                data = adapted if name == "SKILL.md" else (SOURCE / name).read_bytes()
+                data = check_output(["git", "cat-file", "blob", oid], cwd=ROOT)
+                if name == "SKILL.md":
+                    data = mixdog_manifest(data)
                 archive.writestr(entry, data)
         staged.replace(OUTPUT)
     finally:
