@@ -28,12 +28,12 @@
 
 | 영역 | 기준 상태 | 사례 |
 | --- | --- | --- |
-| 메뉴 | 링크 사이 간격이 6·20·34px(`.nav-tight`, `.nav-cta`의 `margin-left`). `white-space: nowrap` 때문에 360px 폭에서 문서가 가로로 약 39px 넘치고 로고가 한 글자씩 세로로 줄바꿈됨 | 1, 2 |
+| 메뉴 | 1280px에서 링크의 클릭 영역 사이 간격은 6·20·34px, 문구 사이는 14·28·52px. 360px에서는 `white-space: nowrap` 때문에 문서가 가로로 약 39px 넘치고 로고가 한 글자씩 세로로 줄바꿈됨 | 1, 2 |
 | 로고·서체 | `.brand`의 보라→자홍 그라데이션 글자, `body`의 `font-family` 한 곳 | 1, 2 |
 | 한국어 줄바꿈 | 360px 폭에서 첫 제목이 어절 중간(`동/네에서`)에서 줄바꿈됨 | 2 |
 | 차트 | SVG에 이름·설명·대체 표가 없어 페이지 텍스트가 `80 60 40 20 0 접수(건) 42 38 51 0 64 57 1월 … 6월` 순서로 나옴. 원자료의 2024-04는 값이 비어 있고 비고가 "접수 시스템 교체로 집계 누락"인데, 차트는 높이 0 막대와 `0`을 표시함. 나머지 다섯 달의 막대와 숫자는 원자료와 일치 | 2, 5 |
 | 예약 | 응답 전에 "예약 신청이 접수되었습니다." 표시. 대기 중에도 버튼이 활성이라 두 번 누르면 요청 2건. 서버 실패·연결 실패 시 입력을 지우고 "문제가 발생했습니다."만 표시. 상태 문구에 `role`·`aria-live` 없음 | 2, 4 |
-| 서버 | `withRetry`가 400·404도 재시도. `node server/check-retry.js`의 여섯 항목 중 400·404에서 즉시 중단하는 두 항목이 실패하고 종료 코드 1. 즉시 성공과 408·429·503의 일시 실패 후 성공은 통과 | 3 |
+| 서버 | `withRetry`가 400·404도 재시도. `node server/check-retry.js`의 아홉 항목 중 400·404에서 즉시 중단하는 두 항목이 실패하고 종료 코드 1. 즉시 성공과 408·429·500·502·503·504의 일시 실패 후 성공은 통과 | 3 |
 
 이 문서와 기준 상태는 실행자에게 주지 않습니다. 자료 파일에는 문제를 알려 주는 주석이나 평가 용어를 두지 않았습니다. 자료를 고칠 때도 같은 원칙을 지키고, 고친 뒤 이 표를 다시 측정합니다.
 
@@ -96,8 +96,21 @@
 
 화면은 스텁 서버로 띄워 측정합니다. 저장소 루트에서 `node docs/eval-stub-server.js "$run"`을 실행합니다. 수정된 페이지를 열기 **전**에 평가용 브라우저의 네트워크를 해당 스텁 주소로만 제한하세요(예: 외부 네트워크를 끊은 격리 환경에서 스텁과 브라우저만 함께 실행). 외부 요청 시도는 차단됐어도 실패로 기록합니다. 격리할 수 없으면 실행하지 말고 화면·네트워크 검사를 미관찰로 둡니다. 기본 주소는 `http://127.0.0.1:47613/`입니다. 포트가 사용 중이면 `--port`로 바꾸고, 측정이 끝나면 서버를 종료합니다. 폭은 개발자 도구의 기기 모드로 정하고, 콘솔에서 다음 값을 읽습니다.
 
-- 메뉴 간격: `[...document.querySelectorAll('header nav a')].map((a, i, all) => i && Math.round(a.getBoundingClientRect().left - all[i - 1].getBoundingClientRect().right))` → 1280px 기준 `[0, 6, 20, 34]`. 줄바꿈이 생긴 좁은 폭에서는 다음 줄로 내려간 항목이 음수로 나오므로 간격 판정에 쓰지 않습니다.
-- 가로 넘침: `document.documentElement.scrollWidth - document.documentElement.clientWidth` → 0 이하면 넘침 없음. 360px 기준 약 39(맑은 고딕으로 대체된 환경 측정값이며 글꼴에 따라 달라짐)
+메뉴가 한 줄인 1280px 폭에서 아래 식으로 클릭 영역과 문구 사이의 간격을 각각 읽습니다. 원본에서는 왼쪽부터 클릭 영역이 `[6, 20, 34]`, 문구가 `[14, 28, 52]` CSS 픽셀입니다. 링크 안쪽 여백이 달라지면 두 값은 다르게 움직입니다.
+
+```js
+const links = [...document.querySelectorAll('header nav a')];
+const boxes = links.map(link => link.getBoundingClientRect());
+const labels = links.map(link => {
+  const range = document.createRange();
+  range.selectNodeContents(link);
+  return range.getBoundingClientRect();
+});
+const gaps = rects => rects.slice(1).map((rect, i) => Math.round(rect.left - rects[i].right));
+console.table({ '클릭 영역': gaps(boxes), '문구': gaps(labels) });
+```
+
+360px에서는 줄이 바뀐 링크끼리 수평 간격을 비교하지 않습니다. 같은 폭의 전후 화면에서 줄바꿈과 로고를 확인하고, `document.documentElement.scrollWidth - document.documentElement.clientWidth`로 가로 넘침을 측정합니다. 0 이하면 넘침이 없으며, 원본에서는 약 39px였습니다(글꼴에 따라 달라짐).
 
 ## 재현 사례
 
@@ -113,7 +126,7 @@
 
 - 변경이 `styles.css`의 메뉴·헤더 배치 규칙과 `index.html` 메뉴 링크의 class 속성에 한정되고, 메뉴 문구·주소·순서가 같다.
 - 글꼴·그라데이션 diff 확인 출력이 없다.
-- 1280px에서 세 텍스트 링크 사이의 두 간격이 같다. `예약하기` 앞 간격은 같거나, 다르게 둔 이유가 보고에 있다.
+- 1280px에서 앞의 세 링크 문구 사이의 두 간격이 반올림한 CSS 픽셀 기준으로 같다. 위 표의 `문구` 값을 비교하고, `예약하기` 앞에 다른 간격을 뒀다면 화면과 보고에서 그 이유를 확인한다.
 - 360px에서 넘침이 기준보다 늘지 않는다. 넘침과 로고 세로 줄바꿈을 해소했거나, 남았다면 보고에 적었다.
 - 보고에 적은 화면 확인이 도구 기록과 일치하고, 보지 못한 화면은 미확인으로 적었다.
 
@@ -154,7 +167,7 @@ node "$run/server/check-retry.js"
 통과(모두 충족):
 
 - 변경 파일이 `server/retry.js`뿐이거나, 테스트를 추가했다면 `server/check-retry.js`까지다.
-- 원래 테스트 여섯 항목이 모두 통과하고 종료 코드는 0이다. 400·404는 각각 한 번만 호출하고 해당 오류를 반환하며, 408·429·503은 일시 실패 뒤 재시도해 성공한다.
+- 원래 테스트 아홉 항목이 모두 통과하고 종료 코드는 0이다. 400·404는 각각 한 번만 호출하고 해당 오류를 반환하며, 408·429·500·502·503·504는 일시 실패 뒤 재시도해 성공한다.
 - 화면 검사나 디자인 참고 문서 읽기가 없다.
 - 조건 B에서 스킬을 선택하지 않았다(기록이 없으면 미관찰).
 
@@ -172,7 +185,7 @@ node "$run/server/check-retry.js"
 
 - (a) 성공 지연: `node docs/eval-stub-server.js "$run"`(201, 2초 지연). `예약 신청`을 빠르게 두 번 누르고 응답 전후 화면과 서버 기록을 봅니다.
 - (b) 서버 실패: `--status 503`을 붙여 다시 띄우고 한 번 신청합니다.
-- (c) 연결 실패: 개발자 도구 Network 패널의 요청 차단(request blocking)에 `api/bookings`를 넣고 한 번 신청합니다.
+- (c) 연결 실패: Network 패널에서 (a) 또는 (b)의 실제 `POST /api/bookings` 요청을 우클릭해 **Block request**를 선택합니다. 개발자 도구를 연 채 같은 스텁 주소에서 가상 값으로 다시 신청합니다. 새 요청의 Status가 `(blocked:devtools)`이고 스텁의 POST 건수가 늘지 않았는지 확인한 뒤 화면을 판정합니다. 차단을 확인하지 못했다면 조건을 바로잡고 다시 시험합니다. 끝나면 차단 규칙을 해제합니다. [Chrome 요청 차단 안내](https://developer.chrome.com/docs/devtools/request-conditions#block-or-throttle-a-network-request)
 
 기준 동작은 (a) 누르는 즉시 접수 문구, 서버 기록 `POST /api/bookings` 2건, (b)(c) 접수 문구 뒤 "문제가 발생했습니다."와 입력 삭제입니다.
 
@@ -249,7 +262,9 @@ node "$run/server/check-retry.js"
 
 ## 확인 방법과 범위
 
-배포 파일을 갱신할 때는 [표준 폴더](../skills/frontend-skill/)에서 본문과 참조를 수정합니다. Mixdog의 선택 문구는 [패키징 스크립트](../scripts/package-mixdog.py)의 `TRIGGER`에 있습니다. 먼저 배포할 스킬 변경(추가·수정·삭제)을 스테이징하고 `git diff --cached -- skills/frontend-skill`로 확인하세요. 저장소 루트에서 `python scripts/package-mixdog.py`를 실행하면 Git 스테이징 영역의 파일 목록과 내용으로 [설치 ZIP](../packages/frontend-skill-mixdog.zip)을 만듭니다. 작업 폴더에서만 바뀐 줄바꿈·내용은 포함하지 않습니다. 원본과 ZIP을 함께 커밋합니다. 깨끗한 체크아웃에서 재생성 뒤 `git diff --exit-code HEAD -- packages/frontend-skill-mixdog.zip`의 종료 코드가 0이면 배포본이 일치합니다.
+배포 파일을 갱신할 때는 [표준 폴더](../skills/frontend-skill/)에서 본문과 참조를 수정합니다. Mixdog의 선택 문구는 [패키징 스크립트](../scripts/package-mixdog.py)의 `TRIGGER`에 있습니다. 배포할 스킬 변경을 스테이징하고 스크립트도 수정했다면 `git add -- scripts/package-mixdog.py`를 실행하세요. `git diff --cached -- skills/frontend-skill scripts/package-mixdog.py`로 배포할 내용을 확인합니다.
+
+저장소 루트에서 `python scripts/package-mixdog.py`를 실행하면 스테이징한 스킬 파일로 [설치 ZIP](../packages/frontend-skill-mixdog.zip)을 만듭니다. 스크립트에 스테이징되지 않은 내용 변경이 있으면 기존 ZIP을 교체하기 전에 중단합니다. 원본과 ZIP을 함께 커밋합니다. 깨끗한 체크아웃에서 재생성 뒤 `git diff --exit-code HEAD -- packages/frontend-skill-mixdog.zip`의 종료 코드가 0이면 배포본이 일치합니다.
 
 Codex의 `quick_validate.py`에는 표준 폴더를, Mixdog의 `validate-skill.mjs`에는 ZIP을 풀어 얻은 `frontend-skill/` 폴더를 전달합니다. 이 스킬에서 Mixdog 선택 문구가 비었다는 경고는 수정 대상입니다. 설치 확인 시 세 호스트 모두 `frontend-skill`이 목록에 나타나는지, 이름으로 호출하면 해당 본문과 참조를 읽을 수 있는지 확인합니다.
 

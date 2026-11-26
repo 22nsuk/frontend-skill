@@ -11,6 +11,16 @@ function httpError(status) {
 
 const noWait = () => Promise.resolve();
 
+// Each pair gives the HTTP status and the number of failures before recovery.
+const recoveryCases = [
+  [408, 1],
+  [429, 1],
+  [500, 1],
+  [502, 1],
+  [503, 2],
+  [504, 1],
+];
+
 async function expectRecovery(status, failuresBeforeSuccess) {
   let calls = 0;
   const result = await withRetry(async () => {
@@ -32,9 +42,10 @@ const tests = [
     assert.equal(result, 'ok');
     assert.equal(calls, 1);
   }],
-  ['retries a temporary server error (503)', () => expectRecovery(503, 2)],
-  ['retries a request timeout (408)', () => expectRecovery(408, 1)],
-  ['retries a rate-limited request (429)', () => expectRecovery(429, 1)],
+  ...recoveryCases.map(([status, failuresBeforeSuccess]) => [
+    `recovers after HTTP ${status}`,
+    () => expectRecovery(status, failuresBeforeSuccess),
+  ]),
   ...[400, 404].map((status) => [`does not retry a rejected request (${status})`, async () => {
     let calls = 0;
     await assert.rejects(withRetry(async () => {
