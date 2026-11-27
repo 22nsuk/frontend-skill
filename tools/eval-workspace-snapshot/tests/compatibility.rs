@@ -161,6 +161,32 @@ fn reads_escaped_field_names_and_ignores_unknown_fields() {
 }
 
 #[test]
+fn rejects_unescaped_control_characters_in_keys() {
+    let temp = tempdir().unwrap();
+    let before = temp.path().join("before");
+    let after = temp.path().join("after");
+    snapshot(&before, "/site", "1", "");
+    snapshot(&after, "/site", "2", "");
+    let clean = fs::read_to_string(&after).unwrap();
+    for control in ['\t', '\n', '\0'] {
+        fs::write(
+            &after,
+            clean.replacen('{', &format!("{{\"bad{control}key\":0,"), 1),
+        )
+        .unwrap();
+        for (a, b) in [(&before, &after), (&after, &before)] {
+            assert!(compare(a, b, 2).contains("Cannot read snapshot"));
+        }
+    }
+    fs::write(
+        &after,
+        clean.replacen('{', r#"{"ok\t\n\u0000\ud800":0,"#, 1),
+    )
+    .unwrap();
+    assert_eq!(compare(&before, &after, 0), CLEAN);
+}
+
+#[test]
 fn handles_utf16_roots_and_timestamp_order() {
     let temp = tempdir().unwrap();
     let before = temp.path().join("before");

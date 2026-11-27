@@ -224,6 +224,137 @@ fn reads_link_targets_without_following_them() {
     );
 }
 
+#[test]
+fn records_a_deep_directory_tree() {
+    let temp = tempdir();
+    let workspace = temp.path().join("site");
+    fs::create_dir(&workspace).unwrap();
+    let mut deepest = workspace.canonicalize().unwrap();
+    let depth = if cfg!(target_os = "macos") { 300 } else { 600 };
+    for _ in 0..depth {
+        deepest.push("d");
+        fs::create_dir(&deepest).unwrap();
+    }
+    let leaf = deepest.join("leaf");
+    fs::write(&leaf, "end").unwrap();
+    let snapshot = temp.path().join("deep.json");
+    record(&workspace, &snapshot);
+    let saved = read_json(&snapshot);
+    let entries = saved["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), depth + 1);
+    assert_eq!(
+        entries[depth]["path"],
+        format!("{}leaf", "d/".repeat(depth))
+    );
+    assert_eq!(entries[depth]["size"], 3);
+    fs::remove_file(leaf).unwrap();
+    for _ in 0..depth {
+        fs::remove_dir(&deepest).unwrap();
+        deepest.pop();
+    }
+}
+
+#[test]
+fn distinguishes_workspace_roots_using_actual_directory_names() {
+    let temp = tempdir();
+    for (name, variant) in [("İ", "i\u{307}"), ("case", "CASE")] {
+        let first = temp.path().join(name);
+        let second = temp.path().join(variant);
+        fs::create_dir(&first).unwrap();
+        match fs::create_dir(&second) {
+            Ok(()) => {
+                // Both directories exist independently. The second is a valid output
+                // directory, and comparing a snapshot of each must fail.
+                let before = second.join("before.json");
+                record(&first, &before);
+                let after = first.join("after.json");
+                record(&second, &after);
+                assert!(compare(&before, &after, 2).contains("different workspaces"));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let output = second.join("inside.json");
+                assert!(cli("record", &[&first, &output], 2).contains("outside the workspace"));
+                assert!(!output.exists());
+            }
+            Err(error) => panic!("cannot create {second:?}: {error}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn non_unicode_name() -> std::ffi::OsString {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(vec![0xff])
+}
+
+#[cfg(windows)]
+fn non_unicode_name() -> std::ffi::OsString {
+    use std::os::windows::ffi::OsStringExt;
+    std::ffi::OsString::from_wide(&[0xd800])
+}
+
+// Some macOS volumes reject invalid byte sequences at creation time. These
+// recorder cases apply only when the filesystem can actually store the fixture.
+fn created_non_unicode_fixture(result: std::io::Result<()>) -> bool {
+    match result {
+        Ok(()) => true,
+        #[cfg(target_os = "macos")]
+        Err(e) if matches!(e.raw_os_error(), Some(libc::EILSEQ | libc::EINVAL)) => false,
+        Err(e) => panic!("cannot create non-Unicode test fixture: {e}"),
+    }
+}
+
+#[test]
+fn rejects_unrepresentable_workspace_paths_without_publishing() {
+    let temp = tempdir();
+    let workspace = temp.path().join(non_unicode_name());
+    if !created_non_unicode_fixture(fs::create_dir(&workspace)) {
+        return;
+    }
+    let snapshot = temp.path().join("invalid.json");
+    assert!(cli("record", &[&workspace, &snapshot], 2).contains("Non-Unicode workspace root"));
+    assert!(!snapshot.exists());
+    let child = temp.path().join("workspace");
+    fs::create_dir(&child).unwrap();
+    fs::write(child.join(non_unicode_name()), []).unwrap();
+    assert!(cli("record", &[&child, &snapshot], 2).contains("Non-Unicode filename"));
+    assert!(!snapshot.exists());
+}
+
+#[test]
+fn rejects_unrepresentable_symlink_targets_without_publishing() {
+    let temp = tempdir();
+    let workspace = temp.path().join("workspace");
+    fs::create_dir(&workspace).unwrap();
+    let link = workspace.join("redirect");
+    #[cfg(unix)]
+    if !created_non_unicode_fixture(std::os::unix::fs::symlink(non_unicode_name(), link)) {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        let target = temp.path().join(non_unicode_name());
+        fs::create_dir(&target).unwrap();
+        // mklink consumes native UTF-16. PowerShell normalizes lone surrogates
+        // when it builds its junction reparse buffer.
+        let status = Command::new("cmd.exe")
+            .current_dir(temp.path())
+            .args(["/d", "/c", "mklink", "/j", r"workspace\redirect"])
+            .arg(non_unicode_name())
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "{status:?}");
+        assert!(fs::read_link(&link).unwrap().to_str().is_none());
+    }
+    let snapshot = temp.path().join("invalid.json");
+    let error = cli("record", &[&workspace, &snapshot], 2);
+    assert!(
+        error.contains("Non-Unicode symlink target for \"redirect\""),
+        "{error}"
+    );
+    assert!(!snapshot.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn records_fifo_as_other() {

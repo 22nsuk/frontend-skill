@@ -1,2 +1,0 @@
-# Build-only: scripts/package-mixdog.py checks the generated Mixdog SKILL.md with PyYAML.
-PyYAML>=6,<7

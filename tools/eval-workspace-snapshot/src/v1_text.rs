@@ -53,17 +53,6 @@ impl V1Text {
             .flat_map(|(text, lone)| text.encode_utf16().chain(lone))
     }
 
-    pub fn same_root(&self, other: &Self) -> bool {
-        if self == other {
-            return true;
-        }
-        if cfg!(any(windows, target_os = "macos")) {
-            let fold = |(text, lone): (&str, Option<u16>)| (text.to_lowercase(), lone);
-            return self.parts().map(fold).eq(other.parts().map(fold));
-        }
-        false
-    }
-
     pub fn quoted(&self) -> String {
         let mut result = String::from("\"");
         for (text, lone) in self.parts() {

@@ -97,7 +97,11 @@ fn load(file: &Path) -> Result<Loaded, String> {
     let bytes = fs::read(file).map_err(|e| format!("Cannot read snapshot {file_name}: {e}"))?;
     let json = String::from_utf8_lossy(&bytes);
     let invalid_format = || format!("Not a workspace snapshot from this tool: {file_name}");
-    let data: Fields = serde_json::from_str(&json).map_err(|e| {
+    // The byte-string decoder used for v1 keys also accepts raw control characters.
+    // Validate JSON syntax before decoding keys, preserving escaped lone surrogates.
+    let document: &RawValue = serde_json::from_str(&json)
+        .map_err(|e| format!("Cannot read snapshot {file_name}: {e}"))?;
+    let data: Fields = serde_json::from_str(document.get()).map_err(|e| {
         if e.is_data() {
             invalid_format()
         } else {
@@ -162,7 +166,7 @@ fn load(file: &Path) -> Result<Loaded, String> {
 pub fn compare(before: &Path, after: &Path) -> Result<u8, String> {
     let before = load(before)?;
     let after = load(after)?;
-    if !before.root.same_root(&after.root) {
+    if before.root != after.root {
         return Err(format!(
             "Snapshots come from different workspaces: {} and {}",
             before.root, after.root
@@ -181,23 +185,37 @@ pub fn compare(before: &Path, after: &Path) -> Result<u8, String> {
 }
 
 fn report(old: &Entries, now: &Entries, output: &mut impl Write) -> io::Result<u8> {
-    let mut paths: Vec<_> = old
-        .keys()
-        .chain(now.keys().filter(|p| !old.contains_key(*p)))
-        .collect();
-    paths.sort_unstable_by(|a, b| a.units().cmp(b.units()));
+    enum Change<'a> {
+        Added(&'a Kind<V1Text>),
+        Removed(&'a Kind<V1Text>),
+        Changed(&'a Kind<V1Text>, &'a Kind<V1Text>),
+    }
+    let mut differences = Vec::new();
+    for (path, prev) in old {
+        match now.get(path) {
+            None => differences.push((path, Change::Removed(prev))),
+            Some(new) if prev != new => differences.push((path, Change::Changed(prev, new))),
+            _ => {}
+        }
+    }
+    for (path, new) in now {
+        if !old.contains_key(path) {
+            differences.push((path, Change::Added(new)));
+        }
+    }
+    differences.sort_unstable_by(|a, b| a.0.units().cmp(b.0.units()));
     let (mut added, mut removed, mut changed) = (0usize, 0usize, 0usize);
-    for path in paths {
-        match (old.get(path), now.get(path)) {
-            (None, Some(new)) => {
+    for (path, change) in differences {
+        match change {
+            Change::Added(new) => {
                 added += 1;
                 writeln!(output, "added {} {}", new.name(), path.quoted())?;
             }
-            (Some(prev), None) => {
+            Change::Removed(prev) => {
                 removed += 1;
                 writeln!(output, "removed {} {}", prev.name(), path.quoted())?;
             }
-            (Some(prev), Some(new)) if prev != new => {
+            Change::Changed(prev, new) => {
                 changed += 1;
                 write!(output, "changed {} {} ", new.name(), path.quoted())?;
                 match (prev, new) {
@@ -210,7 +228,6 @@ fn report(old: &Entries, now: &Entries, output: &mut impl Write) -> io::Result<u
                     _ => writeln!(output, "(was {})", prev.name())?,
                 }
             }
-            _ => {}
         }
     }
     if added + removed + changed == 0 {

@@ -10,26 +10,30 @@ use std::time::SystemTime;
 
 // Node's realpath/readlink expose drive and UNC paths without Rust's verbatim prefix.
 // Keep the native paths for IO, including long paths on Windows.
-fn display_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
+fn v1_path(path: &Path) -> Option<String> {
+    let text = path.to_str()?;
     #[cfg(windows)]
     if let Some(rest) = text.strip_prefix(r"\\?\") {
         if let Some(share) = rest.strip_prefix(r"UNC\") {
-            return format!(r"\\{share}");
+            return Some(format!(r"\\{share}"));
         }
         if rest.as_bytes().get(1) == Some(&b':') {
-            return rest.to_owned();
+            return Some(rest.to_owned());
         }
     }
-    text.into_owned()
+    Some(text.to_owned())
 }
 
-fn comparable(path: &Path) -> PathBuf {
-    if cfg!(any(windows, target_os = "macos")) {
-        PathBuf::from(display_path(path).to_lowercase())
-    } else {
-        path.to_owned()
+fn require_in_place(path: &Path, relative: &str) -> io::Result<()> {
+    let resolved = path.canonicalize()?;
+    if resolved != path {
+        return Err(io::Error::other(format!(
+            "Refusing to read {}: it resolves to {}",
+            serde_json::to_string(relative)?,
+            resolved.display()
+        )));
     }
+    Ok(())
 }
 
 fn hash_file(path: &Path, buffer: &mut [u8]) -> io::Result<Kind> {
@@ -57,54 +61,56 @@ fn hash_file(path: &Path, buffer: &mut [u8]) -> io::Result<Kind> {
     })
 }
 
-fn walk(dir: &Path, prefix: &str, entries: &mut Vec<Entry>, buffer: &mut [u8]) -> io::Result<()> {
-    for child in fs::read_dir(dir)? {
-        let child = child?;
-        let name = child.file_name();
-        let name = name.to_str().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Non-Unicode filename in {}", dir.display()),
-            )
-        })?;
-        if prefix.is_empty() && name == ".git" {
-            continue;
-        }
-        let path = child.path();
-        let relative = if prefix.is_empty() {
-            name.to_owned()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        let ty = child.file_type()?;
-        let kind = if ty.is_symlink() {
-            Kind::Symlink {
-                target: display_path(&fs::read_link(&path)?),
+fn walk(root: &Path) -> io::Result<Vec<Entry>> {
+    let mut entries = Vec::new();
+    let mut buffer = vec![0; 1 << 20];
+    let mut directories = vec![(root.to_owned(), String::new())];
+    while let Some((dir, prefix)) = directories.pop() {
+        require_in_place(&dir, &prefix)?;
+        for child in fs::read_dir(&dir)? {
+            let child = child?;
+            let name = child.file_name();
+            let name = name.to_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Non-Unicode filename in {}", dir.display()),
+                )
+            })?;
+            if prefix.is_empty() && name == ".git" {
+                continue;
             }
-        } else if ty.is_dir() || ty.is_file() {
-            let resolved = path.canonicalize()?;
-            if comparable(&resolved) != comparable(&path) {
-                return Err(io::Error::other(format!(
-                    "Refusing to read {}: it resolves to {}",
-                    serde_json::to_string(&relative)?,
-                    display_path(&resolved)
-                )));
-            }
-            if ty.is_file() {
-                hash_file(&path, buffer)?
+            let path = child.path();
+            let relative = if prefix.is_empty() {
+                name.to_owned()
             } else {
-                walk(&path, &relative, entries, buffer)?;
+                format!("{prefix}/{name}")
+            };
+            let ty = child.file_type()?;
+            let kind = if ty.is_symlink() {
+                Kind::Symlink {
+                    target: v1_path(&fs::read_link(&path)?).ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Non-Unicode symlink target for {relative:?}"),
+                        )
+                    })?,
+                }
+            } else if ty.is_dir() {
+                directories.push((path, relative.clone()));
                 Kind::Dir
-            }
-        } else {
-            Kind::Other
-        };
-        entries.push(Entry {
-            path: relative,
-            kind,
-        });
+            } else if ty.is_file() {
+                require_in_place(&path, &relative)?;
+                hash_file(&path, &mut buffer)?
+            } else {
+                Kind::Other
+            };
+            entries.push(Entry {
+                path: relative,
+                kind,
+            });
+        }
     }
-    Ok(())
+    Ok(entries)
 }
 
 fn output_path(requested: &Path) -> Result<PathBuf, Box<dyn Error>> {
@@ -136,6 +142,32 @@ fn output_path(requested: &Path) -> Result<PathBuf, Box<dyn Error>> {
     Ok(real_parent.join(name))
 }
 
+#[cfg(unix)]
+fn directory_id(path: &Path) -> io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn directory_id(path: &Path) -> io::Result<same_file::Handle> {
+    same_file::Handle::from_path(path)
+}
+
+fn inside_workspace(root: &Path, target: &Path) -> io::Result<bool> {
+    if target.starts_with(root) {
+        return Ok(true);
+    }
+    // Aliases and filesystem-specific case rules can give one directory two spellings.
+    let root_id = directory_id(root)?;
+    for ancestor in target.ancestors().skip(1) {
+        if directory_id(ancestor)? == root_id {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn record(workspace: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
     if !workspace.is_dir() {
         return Err(format!(
@@ -145,12 +177,13 @@ pub fn record(workspace: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
         .into());
     }
     let root = workspace.canonicalize()?;
+    let recorded_root = v1_path(&root).ok_or("Non-Unicode workspace root")?;
     let target = output_path(output)?;
-    if comparable(&target).starts_with(comparable(&root)) {
+    let display_target = v1_path(&target).unwrap_or_else(|| target.display().to_string());
+    if inside_workspace(&root, &target)? {
         return Err(format!(
             "Record the snapshot outside the workspace: {} is inside {}",
-            display_path(&target),
-            display_path(&root)
+            display_target, recorded_root
         )
         .into());
     }
@@ -158,7 +191,7 @@ pub fn record(workspace: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
         Ok(_) => {
             return Err(format!(
                 "Snapshot already exists; choose a new file: {}",
-                display_path(&target)
+                display_target
             )
             .into())
         }
@@ -168,12 +201,11 @@ pub fn record(workspace: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
 
     let recorded_at =
         DateTime::<Utc>::from(SystemTime::now()).to_rfc3339_opts(SecondsFormat::Millis, true);
-    let mut entries = Vec::new();
-    walk(&root, "", &mut entries, &mut vec![0; 1 << 20])?;
+    let mut entries = walk(&root)?;
     entries.sort_unstable_by(|left, right| path_order(&left.path, &right.path));
     let snapshot = Snapshot {
         format: FORMAT.into(),
-        root: display_path(&root),
+        root: recorded_root,
         recorded_at,
         entries,
     };
@@ -202,7 +234,7 @@ pub fn record(workspace: &Path, output: &Path) -> Result<(), Box<dyn Error>> {
         "Recorded {} entries from {} to {}",
         snapshot.entries.len(),
         snapshot.root,
-        display_path(&target)
+        display_target
     );
     Ok(())
 }

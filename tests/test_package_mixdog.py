@@ -4,7 +4,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from shutil import copy2
+from shutil import copy2, copytree
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
@@ -40,13 +40,18 @@ class MixdogPackageTest(unittest.TestCase):
         self.script = self.root / "scripts/package-mixdog.py"
         self.script.parent.mkdir()
         copy2(ROOT / "scripts/package-mixdog.py", self.script)
+        self.helper = self.script.with_name("mixdog-manifest.mjs")
+        copy2(ROOT / "scripts/mixdog-manifest.mjs", self.helper)
+        copy2(ROOT / "package.json", self.root)
+        copy2(ROOT / "package-lock.json", self.root)
+        copytree(ROOT / "node_modules/yaml", self.root / "node_modules/yaml")
         self.skill = self.root / "skills/frontend-skill"
         self.skill.mkdir(parents=True)
         (self.skill / "SKILL.md").write_bytes(b"---\nname: frontend-skill\ndescription: Example\n---\n\nOriginal body.\n")
         (self.skill / "reference.md").write_bytes(b"First line.\nSecond line.\n")
         (self.root / ".gitattributes").write_bytes(b"* text=auto eol=lf\n")
         subprocess.run(["git", "init", "-q"], cwd=self.root, check=True)
-        subprocess.run(["git", "add", "--", ".gitattributes", "scripts", "skills"], cwd=self.root, check=True)
+        subprocess.run(["git", "add", "--", ".gitattributes", "package.json", "package-lock.json", "scripts", "skills"], cwd=self.root, check=True)
         self.archive = self.root / ARCHIVE_PATH
 
     def build(self, *args, check=True):
@@ -81,11 +86,14 @@ class MixdogPackageTest(unittest.TestCase):
         sources = {
             b"---\nname: wrong-skill\ndescription: Example\n---\n\nBody.\n": "must match the packaged folder",
             b"---\nname: frontend-skill\ndescription:\n---\n\nBody.\n": "description must be a nonempty string",
+            b"---\nname: frontend-skill\ndescription: 1e3\n---\n\nBody.\n": "description must be a nonempty string",
             b"---\nname: frontend-skill\nwhen_to_use: Existing\ndescription: Example\n---\n\nBody.\n": duplicate,
             b'---\nname: frontend-skill\n"when_to_\\u0075se": Existing\ndescription: Example\n---\n\nBody.\n': duplicate,
             b"---\n  name: frontend-skill\n  when_to_use: Existing\n  description: Example\n---\n\nBody.\n": duplicate,
             b"---\nname: frontend-skill\ndescription: Example\nmetadata:\n  team: a\n  team: b\n---\n\nBody.\n":
-                "found duplicate key 'team'",
+                "Map keys must be unique",
+            b"---\nname: frontend-skill\ndescription: Example\nmetadata:\n  1e3: a\n  1000: b\n---\n\nBody.\n":
+                "Map keys must be unique",
             b"---\n{name: frontend-skill, description: Example}\n---\n\nBody.\n": "must be a YAML block mapping",
             b"---\nname: frontend-skill\ndescription: Example\n\nBody without a closing fence.\n": "closed by a --- line",
         }
@@ -97,6 +105,8 @@ class MixdogPackageTest(unittest.TestCase):
 
     def test_equivalent_standard_frontmatter_is_packaged(self):
         sources = [
+            b"---\nname: frontend-skill\ndescription: On\n---\n\nBody.\n",
+            b'---\nname: frontend-skill\ndescription: "1e3"\n---\n\nBody.\n',
             b"---\nname: frontend-skill\ndescription: Example\nmetadata:\n  when_to_use: Nested\n---\n\n"
             b"when_to_use: shown as body text.\n",
             b"---\n  name: frontend-skill\n  description: Example\n---\n\nBody.\n",
@@ -113,12 +123,12 @@ class MixdogPackageTest(unittest.TestCase):
                 self.assertTrue(manifest.endswith(source.removeprefix(b"---\n")), manifest)
 
     def test_missing_build_prerequisite_is_reported_without_installing(self):
-        # -I -S hides installed packages, as on a machine without the build requirement.
-        result = subprocess.run(
-            [sys.executable, "-I", "-S", str(self.script)], cwd=self.root, capture_output=True, text=True,
-        )
+        installed = self.root / "node_modules/yaml"
+        installed.rename(self.root / "removed-yaml")
+        result = self.build(check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("python -m pip install -r scripts/requirements-package-mixdog.txt", result.stderr)
+        self.assertIn("Run npm ci", result.stderr)
+        self.assertFalse(installed.exists())
         self.assertFalse(self.archive.exists())
 
     def test_trigger_outside_the_listing_contract_is_not_shipped(self):
@@ -174,6 +184,43 @@ class MixdogPackageTest(unittest.TestCase):
         self.build("--check")
         self.assertEqual(self.archive.read_bytes(), b"Unstaged changes.\n")
 
+    def test_release_runs_validator_on_staged_files_and_propagates_failure(self):
+        # A local upstream fixture exercises the release command without network access.
+        upstream = self.root / "upstream"
+        validator = upstream / "src/defaults/skills/skill-creator/scripts/validate-skill.mjs"
+        validator.parent.mkdir(parents=True)
+        validator.write_text(
+            "import { readFileSync } from 'node:fs';\n"
+            "import { join } from 'node:path';\n"
+            "const actual = readFileSync(join(process.argv[2], 'reference.md'), 'utf8');\n"
+            "if (!actual.startsWith('First line.')) { console.error('reference rejected'); process.exitCode = 1; }\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q"], cwd=upstream, check=True)
+        subprocess.run(["git", "add", "src"], cwd=upstream, check=True)
+        subprocess.run(["git", "-c", "user.name=test", "-c", "user.email=test@localhost",
+                        "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], cwd=upstream, check=True)
+        revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=upstream, text=True).strip()
+        script = self.script.read_text(encoding="utf-8")
+        script = re.sub(r'^UPSTREAM = ".*"$', f'UPSTREAM = "{upstream.as_uri()}"', script, flags=re.M)
+        script = re.sub(r'^UPSTREAM_REVISION = ".*"$', f'UPSTREAM_REVISION = "{revision}"', script, flags=re.M)
+        self.script.write_text(script, encoding="utf-8")
+        subprocess.run(["git", "add", "--", "scripts"], cwd=self.root, check=True)
+        self.build()
+        subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+        (self.skill / "reference.md").write_bytes(b"Rejected reference.\n")
+        self.archive.write_bytes(b"Unstaged ZIP.\n")
+        self.build("--check-release")
+        self.assertEqual(self.archive.read_bytes(), b"Unstaged ZIP.\n")
+
+        subprocess.run(["git", "add", "--", "skills"], cwd=self.root, check=True)
+        self.build()
+        subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+        self.build("--check")
+        failed = self.build("--check-release", check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("reference rejected", failed.stderr)
+
     def test_ship_index_contents_not_worktree_edits(self):
         self.build()
         original = self.archive.read_bytes()
@@ -225,3 +272,12 @@ class MixdogPackageTest(unittest.TestCase):
         self.build()
         with ZipFile(self.archive) as archive:
             self.assertIn(b'when_to_use: "Revised: design pages"', archive.read("frontend-skill/SKILL.md"))
+
+    def test_parser_helper_and_dependency_pins_must_be_staged(self):
+        self.build()
+        for path in [self.helper, self.root / "package.json", self.root / "package-lock.json"]:
+            with self.subTest(path=path.name):
+                original = path.read_bytes()
+                path.write_bytes(original + b"\n")
+                self.assert_not_shipped(f"git add -- {path.relative_to(self.root).as_posix()}")
+                path.write_bytes(original)

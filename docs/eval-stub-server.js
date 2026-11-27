@@ -79,6 +79,13 @@ function isJsonObject(value) {
 function handleBooking(req, res) {
   const n = ++bookings;
   console.log(`#${n} POST /api/bookings`);
+  /** @type {NodeJS.Timeout | undefined} */
+  let responseTimer;
+  res.once('finish', () => console.log(`#${n} responded ${res.statusCode}`));
+  res.once('close', () => {
+    clearTimeout(responseTimer);
+    if (!res.writableFinished) console.log(`#${n} disconnected`);
+  });
   /**
    * @param {number} code
    * @param {{id: string} | {error: string}} payload
@@ -86,7 +93,6 @@ function handleBooking(req, res) {
   function respond(code, payload) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(payload));
-    console.log(`#${n} responded ${code}`);
   }
 
   const mediaType = req.headers['content-type']?.split(';', 1)[0].trim().toLowerCase();
@@ -104,6 +110,7 @@ function handleBooking(req, res) {
     if (bytes <= limit) chunks.push(chunk);
   });
   req.on('end', () => {
+    if (res.destroyed) return;
     if (bytes > limit) return respond(413, { error: 'Booking body too large' });
     /** @type {unknown} */
     let payload;
@@ -118,7 +125,9 @@ function handleBooking(req, res) {
     })) {
       return respond(400, { error: 'Expected name, phone and date as nonempty strings' });
     }
-    setTimeout(() => respond(status, status < 400 ? { id: `stub-${n}` } : { error: 'stub failure' }), delay);
+    responseTimer = setTimeout(() => {
+      respond(status, status < 400 ? { id: `stub-${n}` } : { error: 'stub failure' });
+    }, delay);
   });
 }
 
