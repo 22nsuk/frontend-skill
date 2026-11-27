@@ -11,7 +11,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { pathToFileURL } = require('node:url');
-const vm = require('node:vm');
 const { chromium } = require('playwright-core');
 
 const docs = path.resolve(__dirname, '../docs');
@@ -35,6 +34,12 @@ async function openFixture(t, directory) {
   const page = await openPage(t);
   await page.goto(pathToFileURL(path.join(directory, 'index.html')).href);
   return page;
+}
+
+async function visibleTexts(locator) {
+  return locator.evaluateAll((nodes) => nodes
+    .filter((node) => node.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
+    .map((node) => node.innerText));
 }
 
 /**
@@ -97,10 +102,14 @@ test('fixture files carry no hints about the evaluation', async (t) => {
       const extension = path.extname(file).toLowerCase();
       if (extension === '.css') {
         assert.doesNotMatch(cssHintText(source), hint, file);
-      } else if (extension === '.html') {
-        const { markup, styles } = await page.evaluate((html) => {
-          const doc = new DOMParser().parseFromString(html, 'text/html');
+      } else if (extension === '.html' || extension === '.svg') {
+        const mediaType = extension === '.svg' ? 'image/svg+xml' : 'text/html';
+        const { markup, styles } = await page.evaluate(({ source, mediaType }) => {
+          const doc = new DOMParser().parseFromString(source, mediaType);
           const styles = [];
+          if (mediaType === 'image/svg+xml' && doc.querySelector('parsererror')) {
+            return { markup: source, styles };
+          }
           for (const node of doc.querySelectorAll('style')) {
             styles.push(node.textContent);
             node.textContent = '';
@@ -109,8 +118,18 @@ test('fixture files carry no hints about the evaluation', async (t) => {
             styles.push(node.getAttribute('style'));
             node.removeAttribute('style');
           }
+          // SVG presentation attributes use CSS names and values, e.g. dominant-baseline="auto".
+          for (const node of doc.querySelectorAll('svg, svg *')) {
+            if (!(node instanceof SVGElement)) continue;
+            for (const { name, value } of [...node.attributes]) {
+              if (!name.startsWith('--') && CSS.supports(name, value)) {
+                styles.push(`${name}: ${value}`);
+                node.removeAttribute(name);
+              }
+            }
+          }
           return { markup: new XMLSerializer().serializeToString(doc), styles };
-        }, source);
+        }, { source, mediaType });
         assert.doesNotMatch(markup, hint, file);
         for (const css of styles) assert.doesNotMatch(cssHintText(css), hint, file);
       } else {
@@ -146,12 +165,18 @@ test('workshop menu keeps the measured box and label gaps at 1280px', async (t) 
   assert.equal(await nav.evaluate((node) => getComputedStyle(node).whiteSpace), 'nowrap');
 });
 
-test('workshop logo, typeface and heading keep their original treatment', () => {
+test('workshop logo, typeface and heading keep their original treatment', async (t) => {
   const source = read(workshop, 'styles.css');
-  const brand = rules(source).get('.brand') ?? {};
-  assert.equal(brand.background, 'linear-gradient(90deg, #6d28d9, #c026d3)');
-  assert.equal(brand['background-clip'], 'text');
-  assert.equal(brand.color, 'transparent');
+  const page = await openFixture(t, workshop);
+  const brand = await page.getByRole('link', { name: '동네수리공방' }).evaluate((link) => {
+    const { backgroundImage, backgroundClip, color } = getComputedStyle(link);
+    return { backgroundImage, backgroundClip, color };
+  });
+  assert.deepEqual(brand, {
+    backgroundImage: 'linear-gradient(90deg, rgb(109, 40, 217), rgb(192, 38, 211))',
+    backgroundClip: 'text',
+    color: 'rgba(0, 0, 0, 0)',
+  });
   assert.equal(source.match(/font-family\s*:/g)?.length, 1, 'only body declares a font family');
   assert.match(rules(source).get('body')?.['font-family'] ?? '', /^"Pretendard"/);
   assert.doesNotMatch(source, /keep-all/);
@@ -205,63 +230,69 @@ test('workshop chart draws the missing April count as zero and has no text alter
   assert.match(html, /<figcaption>2024년 1~6월 월별 수리 접수\(건\)<\/figcaption>/);
 });
 
+const booking = { name: '테스트', phone: '01012345678', date: '2025-04-01' };
+
+async function prepareBooking(page) {
+  for (const [field, value] of Object.entries(booking)) {
+    await page.locator(`#booking-form [name="${field}"]`).fill(value);
+  }
+  return page.evaluateHandle(() => {
+    const calls = [];
+    window.fetch = (url, options) => {
+      const response = Promise.withResolvers();
+      const statusAtFetch = document.getElementById('booking-status').textContent;
+      calls.push({ url, options, statusAtFetch, response });
+      return response.promise;
+    };
+    return calls;
+  });
+}
+
 test('a double click on a valid booking sends two POSTs before a response', async (t) => {
   const page = await openFixture(t, workshop);
-  const calls = await page.evaluateHandle(() => {
-    const pending = [];
-    window.fetch = (url, options) => {
-      pending.push([url, options.method]);
-      return new Promise(() => {});
-    };
-    return pending;
-  });
-  await page.locator('[name="name"]').fill('테스트');
-  await page.locator('[name="phone"]').fill('01012345678');
-  await page.locator('[name="date"]').fill('2025-04-01');
+  const calls = await prepareBooking(page);
   const submit = page.getByRole('button', { name: '예약 신청' });
   await submit.dblclick();
-  assert.deepEqual(await calls.jsonValue(), [['api/bookings', 'POST'], ['api/bookings', 'POST']]);
+  const posts = await calls.evaluate((requests) => requests.map(({ url, options }) => [url, options.method]));
+  assert.deepEqual(posts, [['api/bookings', 'POST'], ['api/bookings', 'POST']]);
   assert.ok(await submit.isEnabled(), 'submit remains enabled while the requests are pending');
 });
 
 for (const failure of ['HTTP 503', 'network rejection']) {
   test(`workshop booking announces success early and discards input after ${failure}`, async (t) => {
-    const payload = { name: '테스트', phone: '01012345678', date: '2025-04-01' };
-    const fields = Object.fromEntries(Object.entries(payload).map(([name, value]) => [name, { value }]));
-    const form = Object.assign(new EventTarget(), {
-      elements: fields,
-      reset() {
-        for (const field of Object.values(fields)) field.value = '';
-      },
-    });
-    const status = { textContent: '' };
-    const nodes = { 'booking-form': form, 'booking-status': status };
-    const request = Promise.withResolvers();
-    const fetch = t.mock.fn(() => {
-      assert.equal(status.textContent, '예약 신청이 접수되었습니다.');
-      return request.promise;
-    });
-    const script = read(workshop, 'app.js');
-    assert.match(read(workshop, 'index.html'), /<p id="booking-status" class="booking-status"><\/p>/);
-    vm.runInNewContext(script, { document: { getElementById: (id) => nodes[id] }, fetch });
-    form.dispatchEvent(new Event('submit', { cancelable: true }));
-    assert.equal(fetch.mock.callCount(), 1);
-    const [url, options] = fetch.mock.calls[0].arguments;
-    assert.equal(url, 'api/bookings');
-    assert.equal(options.method, 'POST');
-    assert.equal(options.headers['Content-Type'], 'application/json');
-    assert.deepEqual(JSON.parse(options.body), payload);
-    assert.deepEqual(Object.values(fields).map((field) => field.value), Object.values(payload));
+    const page = await openFixture(t, workshop);
+    const calls = await prepareBooking(page);
+    const status = page.locator('#booking-status');
+    const form = page.locator('#booking-form');
+    const fields = () => form.evaluate((node) => Object.fromEntries(new FormData(node)));
+    assert.equal(await status.getAttribute('role'), null);
+    assert.equal(await status.getAttribute('aria-live'), null);
+    assert.equal(await status.textContent(), '');
+    await page.getByRole('button', { name: '예약 신청' }).click();
 
-    if (failure === 'HTTP 503') {
-      request.resolve(new Response(null, { status: 503 }));
-    } else {
-      request.reject(new TypeError('Failed to fetch'));
-    }
-    // The submit listener returns void. Its fetch promise reactions drain before the next turn.
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(status.textContent, '문제가 발생했습니다.');
-    assert.deepEqual(Object.values(fields).map((field) => field.value), ['', '', '']);
+    const accepted = '예약 신청이 접수되었습니다.';
+    const posts = await calls.evaluate((requests) => requests.map(({ url, options, statusAtFetch }) => ({
+      url,
+      method: options.method,
+      contentType: options.headers['Content-Type'],
+      body: JSON.parse(options.body),
+      statusAtFetch,
+    })));
+    assert.deepEqual(posts, [{
+      url: 'api/bookings', method: 'POST', contentType: 'application/json', body: booking, statusAtFetch: accepted,
+    }]);
+    assert.deepEqual(await visibleTexts(status), [accepted], 'booking status visible while pending');
+    assert.deepEqual(await fields(), booking);
+
+    await calls.evaluate(([{ response }], failure) => {
+      if (failure === 'HTTP 503') {
+        response.resolve(new Response(null, { status: 503 }));
+      } else {
+        response.reject(new TypeError('Failed to fetch'));
+      }
+    }, failure);
+    assert.deepEqual(await visibleTexts(status), ['문제가 발생했습니다.'], 'booking status visible after failure');
+    assert.deepEqual(await fields(), { name: '', phone: '', date: '' });
   });
 }
 
@@ -286,28 +317,35 @@ test('library report hides its conditions and source when printed', async (t) =>
   for (const selector of ['.filter', '.notes']) {
     assert.ok(await page.locator(selector).isVisible(), `${selector} visible on screen`);
   }
-  await page.emulateMedia({ media: 'print' });
-  for (const selector of ['.filter', '.notes']) {
-    assert.equal(await page.locator(selector).evaluate((node) => getComputedStyle(node).display), 'none', selector);
-  }
   const notes = between(html, '<section class="notes">', '</section>');
   assert.match(notes, /솔빛 분관은 5월에 서가 교체로 10일간 휴관했습니다\./);
   assert.match(notes, /<a href="visits\.csv">/);
   const countingRule = page.getByText('한 사람이 여러 번 방문하면 방문할 때마다 한 건으로 셉니다.');
-  assert.ok(await countingRule.isVisible(), 'repeat-visit counting rule visible in print');
   const reportYear = '2025';
-  assert.ok(await page.getByText(`${reportYear}년 2분기`).isVisible(), 'report period visible in print');
-
-  const [branchHeader, ...months] = elements(between(html, '<thead>', '</thead>'), 'th').map(({ text }) => text);
-  assert.equal(branchHeader, '분관');
-  assert.deepEqual([...months].sort(), ['4월', '5월', '6월']);
-  const tableRows = [...html.matchAll(/<tr><th scope="row">([^<]+)<\/th>((?:<td>[^<]+<\/td>)+)<\/tr>/g)];
-  assert.deepEqual(tableRows.map(([, branch]) => branch), ['마루', '솔빛']);
-  const visits = tableRows.flatMap(([, branch, cells]) => {
-    const counts = elements(cells, 'td');
-    assert.equal(counts.length, months.length, branch);
-    return counts.map(({ text }, i) => [branch, reportYear, months[i], text.replace(/,/g, '')]);
-  });
+  const branches = ['마루', '솔빛'];
+  const filter = page.getByRole('combobox', { name: '분관 선택' });
+  const rowHeaders = page.locator('tbody th[scope="row"]');
+  const visits = [];
+  assert.deepEqual(await visibleTexts(rowHeaders), branches);
+  for (const branch of branches) {
+    await filter.selectOption({ label: branch });
+    await page.emulateMedia({ media: 'print' });
+    for (const selector of ['.filter', '.notes']) {
+      assert.equal(await page.locator(selector).evaluate((node) => getComputedStyle(node).display), 'none', selector);
+    }
+    assert.ok(await countingRule.isVisible(), 'repeat-visit counting rule visible in print');
+    assert.ok(await page.getByText(`${reportYear}년 2분기`).isVisible(), 'report period visible in print');
+    assert.deepEqual(await visibleTexts(rowHeaders), [branch], 'only the selected branch prints');
+    const [branchHeader, ...months] = await visibleTexts(page.getByRole('columnheader'));
+    assert.equal(branchHeader, '분관');
+    assert.deepEqual([...months].sort(), ['4월', '5월', '6월']);
+    const counts = await visibleTexts(page.locator('tbody td'));
+    assert.equal(counts.length, months.length, `${branch} printed month cells`);
+    visits.push(...counts.map((text, i) => [branch, reportYear, months[i], text.replace(/,/g, '')]));
+    await page.emulateMedia({ media: 'screen' });
+  }
+  await filter.selectOption({ label: '전체 분관' });
+  assert.deepEqual(await visibleTexts(rowHeaders), branches);
   const csv = parseCsv(read(report, 'visits.csv'));
   const sourceVisits = csv.map((row) => [row['분관'], row['연도'], `${row['월']}월`, row['방문 건수']]);
   assert.deepEqual(visits.sort(), sourceVisits.sort(), 'visit counts by branch, year and month');
