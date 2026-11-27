@@ -41,9 +41,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      - run: npm ci --ignore-scripts
+      - run: npx --no-install playwright-core install --with-deps --only-shell chromium
       - run: node --test tests/eval-stub-server.test.js tests/eval-fixture-baseline.test.js
-      - if: runner.os == 'Linux'
-        run: npm ci --ignore-scripts
       - name: Type-check the reservation stub and Mixdog manifest helper
         if: runner.os == 'Linux'
         run: npm run typecheck

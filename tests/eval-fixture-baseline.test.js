@@ -1,6 +1,6 @@
 'use strict';
 
-// Pins the source-verifiable rows of the baseline table (기준 상태) in docs/evaluation.md.
+// Pins fixture behavior from the baseline table (기준 상태) in docs/evaluation.md.
 // The fixtures contain deliberate faults; a well-meant "fix" would silently invalidate the
 // evaluation cases. When a fixture change is intentional, update that table, re-measure
 // the rendered rows, and update these expectations in the same change.
@@ -10,7 +10,9 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { pathToFileURL } = require('node:url');
 const vm = require('node:vm');
+const { chromium } = require('playwright-core');
 
 const docs = path.resolve(__dirname, '../docs');
 const workshop = path.join(docs, 'eval-fixture');
@@ -18,6 +20,17 @@ const newPage = path.join(docs, 'eval-new-page');
 const report = path.join(docs, 'eval-report');
 /** @param {...string} parts */
 const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
+
+let browser;
+test.after(async () => { await browser?.close(); });
+
+async function openFixture(t, directory) {
+  browser ??= await chromium.launch();
+  const page = await browser.newPage({ offline: true, viewport: { width: 1280, height: 800 } });
+  t.after(() => page.close());
+  await page.goto(pathToFileURL(path.join(directory, 'index.html')).href);
+  return page;
+}
 
 /**
  * Collect the declarations of each selector in a flat stylesheet (no nested blocks).
@@ -30,10 +43,6 @@ function rules(css) {
     const declarations = {};
     for (const [, property, value] of body.matchAll(/(?:^|;)\s*([\w-]+)\s*:\s*([^;]+)/g)) {
       declarations[property] = value.trim();
-      if (property === 'gap') {
-        // The last of one or two gap values sets column-gap at this point in the cascade.
-        declarations['column-gap'] = value.trim().split(/\s+/).at(-1);
-      }
     }
     for (const selector of selectors.split(',')) {
       found.set(selector.trim(), { ...found.get(selector.trim()), ...declarations });
@@ -41,12 +50,6 @@ function rules(css) {
   }
   return found;
 }
-
-/** @param {string} value */
-const px = (value) => {
-  assert.match(value, /^\d+(\.\d+)?px$/);
-  return Number.parseFloat(value);
-};
 
 /** @param {string} csv */
 function parseCsv(csv) {
@@ -81,28 +84,30 @@ test('fixture files carry no hints about the evaluation', () => {
   }
 });
 
-test('workshop menu keeps the uneven spacing measured at 1280px and the narrow overflow', () => {
-  const html = read(workshop, 'index.html');
-  const css = rules(read(workshop, 'styles.css'));
-  const links = [...between(html, '<nav', '</nav>').matchAll(/<a href="([^"]+)"(?: class="([^"]+)")?>([^<]+)<\/a>/g)]
-    .map(([, href, className = '', label]) => ({ href, className, label }));
-  assert.deepEqual(links.map(({ href, label }) => [href, label]), [
+test('workshop menu keeps the measured box and label gaps at 1280px', async (t) => {
+  const page = await openFixture(t, workshop);
+  const nav = page.locator('header nav');
+  const menu = await nav.locator('a').evaluateAll((links) => {
+    const boxes = links.map((link) => link.getBoundingClientRect());
+    const labels = links.map((link) => {
+      const range = document.createRange();
+      range.selectNodeContents(link);
+      return range.getBoundingClientRect();
+    });
+    const gaps = (rects) => rects.slice(1).map((rect, i) => Math.round(rect.left - rects[i].right));
+    return {
+      links: links.map((link) => [link.getAttribute('href'), link.textContent]),
+      boxGaps: gaps(boxes),
+      labelGaps: gaps(labels),
+    };
+  });
+  assert.deepEqual(menu.links, [
     ['#services', '서비스'], ['#prices', '요금'], ['#stats', '접수 현황'], ['#booking', '예약하기'],
   ]);
 
-  const base = css.get('.site-nav a') ?? {};
-  const measured = links.map(({ className }) => {
-    const own = className ? css.get(`.site-nav a.${className}`) ?? {} : {};
-    const [, horizontal] = (own.padding ?? base.padding).split(/\s+/);
-    return { margin: px(own['margin-left'] ?? base['margin-left']), padding: px(horizontal) };
-  });
-  const gap = css.get('.site-nav')?.['column-gap'] ?? 'normal';
-  const columnGap = gap === 'normal' || gap === '0' ? 0 : px(gap);
-  const boxGaps = measured.slice(1).map(({ margin }) => columnGap + margin);
-  const labelGaps = boxGaps.map((boxGap, i) => measured[i].padding + boxGap + measured[i + 1].padding);
-  assert.deepEqual(boxGaps, [6, 20, 34]);
-  assert.deepEqual(labelGaps, [14, 28, 52]);
-  assert.equal(css.get('.site-nav')?.['white-space'], 'nowrap');
+  assert.deepEqual(menu.boxGaps, [6, 20, 34]);
+  assert.deepEqual(menu.labelGaps, [14, 28, 52]);
+  assert.equal(await nav.evaluate((node) => getComputedStyle(node).whiteSpace), 'nowrap');
 });
 
 test('workshop logo, typeface and heading keep their original treatment', () => {
@@ -157,6 +162,25 @@ test('workshop chart draws the missing April count as zero and has no text alter
   assert.match(html, /<figcaption>2024년 1~6월 월별 수리 접수\(건\)<\/figcaption>/);
 });
 
+test('a double click on a valid booking sends two POSTs before a response', async (t) => {
+  const page = await openFixture(t, workshop);
+  const calls = await page.evaluateHandle(() => {
+    const pending = [];
+    window.fetch = (url, options) => {
+      pending.push([url, options.method]);
+      return new Promise(() => {});
+    };
+    return pending;
+  });
+  await page.locator('[name="name"]').fill('테스트');
+  await page.locator('[name="phone"]').fill('01012345678');
+  await page.locator('[name="date"]').fill('2025-04-01');
+  const submit = page.getByRole('button', { name: '예약 신청' });
+  await submit.dblclick();
+  assert.deepEqual(await calls.jsonValue(), [['api/bookings', 'POST'], ['api/bookings', 'POST']]);
+  assert.ok(await submit.isEnabled(), 'submit remains enabled while the requests are pending');
+});
+
 for (const failure of ['HTTP 503', 'network rejection']) {
   test(`workshop booking announces success early and discards input after ${failure}`, async (t) => {
     const payload = { name: '테스트', phone: '01012345678', date: '2025-04-01' };
@@ -175,7 +199,6 @@ for (const failure of ['HTTP 503', 'network rejection']) {
       return request.promise;
     });
     const script = read(workshop, 'app.js');
-    assert.doesNotMatch(script, /disabled/);
     assert.match(read(workshop, 'index.html'), /<p id="booking-status" class="booking-status"><\/p>/);
     vm.runInNewContext(script, { document: { getElementById: (id) => nodes[id] }, fetch });
     form.dispatchEvent(new Event('submit', { cancelable: true }));
@@ -212,11 +235,18 @@ test('workshop retry check fails only on the first non-retryable 4xx', () => {
   ]);
 });
 
-test('library report hides its conditions and source when printed', () => {
+test('library report hides its conditions and source when printed', async (t) => {
   const html = read(report, 'index.html');
   const style = between(html, '<style>', '</style>');
   assert.match(style, /main \{ width: 52rem;/);
-  assert.match(between(html, '@media print', '</style>'), /\.filter, \.notes \{ display: none; \}/);
+  const page = await openFixture(t, report);
+  for (const selector of ['.filter', '.notes']) {
+    assert.ok(await page.locator(selector).isVisible(), `${selector} visible on screen`);
+  }
+  await page.emulateMedia({ media: 'print' });
+  for (const selector of ['.filter', '.notes']) {
+    assert.equal(await page.locator(selector).evaluate((node) => getComputedStyle(node).display), 'none', selector);
+  }
   const notes = between(html, '<section class="notes">', '</section>');
   assert.match(notes, /솔빛 분관은 5월에 서가 교체로 10일간 휴관했습니다\./);
   assert.match(notes, /<a href="visits\.csv">/);
