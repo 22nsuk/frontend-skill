@@ -9,5 +9,5 @@
     "module": "Node16",
     "types": ["node"]
   },
-  "include": ["docs/eval-stub-server.js"]
+  "include": ["docs/eval-stub-server.js", "scripts/mixdog-manifest.mjs"]
 }

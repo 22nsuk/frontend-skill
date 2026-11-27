@@ -385,7 +385,7 @@ git -C "$restore" rev-parse HEAD
 
 ## 확인 방법과 범위
 
-이전 Node 스냅샷 도구를 호출하던 스크립트는 실행 명령을 아래에서 빌드한 바이너리 경로로 바꾸세요. `record <작업 폴더> <새 JSON 파일>`, `compare <이전 JSON> <이후 JSON>`의 인자와 종료 코드(0 동일 또는 기록 성공, 1 변경, 2 오류)는 같습니다. 보관한 `eval-workspace-snapshot/1` JSON은 변환 없이 읽습니다. 모든 OS에서 두 기록의 정규화된 루트 경로 표기가 정확히 일치해야 합니다. 대소문자만 다르게 적힌 과거 기록도 서로 다른 작업 폴더로 처리해 종료 코드 2를 반환합니다. 새로 기록할 때 루트·항목 이름·링크 대상을 유니코드로 손실 없이 표현할 수 없으면 파일을 생성하기 전에 오류로 종료합니다. 경로와 링크 대상을 UTF-16 코드 단위로 비교하므로, JSON에 이스케이프된 단독 서로게이트도 대체 문자와 구별해 변경 목록에 표시합니다.
+이전 Node 스냅샷 도구를 호출하던 스크립트는 실행 명령을 아래에서 빌드한 바이너리 경로로 바꾸세요. `record <작업 폴더> <새 JSON 파일>`, `compare <이전 JSON> <이후 JSON>`의 인자와 종료 코드(0 동일 또는 기록 성공, 1 변경, 2 오류)는 같습니다. 보관한 `eval-workspace-snapshot/1` JSON은 변환 없이 읽습니다. 스냅샷 파일은 유효한 UTF-8이어야 합니다. 어느 한쪽이라도 손상된 바이트가 있으면 비교 결과를 출력하지 않고 종료 코드 2를 반환합니다. 모든 OS에서 두 기록의 정규화된 루트 경로 표기가 정확히 일치해야 합니다. 대소문자만 다르게 적힌 과거 기록도 서로 다른 작업 폴더로 처리해 종료 코드 2를 반환합니다. 새로 기록할 때 루트·항목 이름·링크 대상을 유니코드로 손실 없이 표현할 수 없으면 파일을 생성하기 전에 오류로 종료합니다. 경로와 링크 대상을 UTF-16 코드 단위로 비교하므로, JSON에 이스케이프된 단독 서로게이트도 대체 문자와 구별해 변경 목록에 표시합니다.
 
 저장소 루트에서 다음 명령으로 [전후 스냅샷](#작업-폴더의-전후-스냅샷)에 쓸 실행 파일을 빌드하고 검사합니다. 기본 출력 경로는 `tools/eval-workspace-snapshot/target/release/eval-workspace-snapshot`입니다(Windows는 `.exe`).
 
@@ -394,11 +394,21 @@ cargo build --release --locked --manifest-path tools/eval-workspace-snapshot/Car
 cargo test --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml
 ```
 
-`cargo test`는 Rust 단위 검사와 CLI 통합 검사를 실행합니다. 테스트 자료를 만들 때 Git과 Windows의 `pwsh`와 `cmd.exe` 내장 `mklink`(정션) 또는 Unix의 `mkfifo`(이름 있는 파이프)를 사용합니다. 이전 Node CLI로 생성한 고정 기록, 무시된 파일과 링크, 변경 없는 실행, 중복 경로, 잘못된 해시와 바이트 수를 검사합니다. 성능 측정은 `node scripts/benchmark-workspace-snapshot.js <Rust 실행 파일 경로>`로 실행합니다. 실제 공방 자료와 1,001개 파일의 합성 작업 폴더에서 기록 시간을 측정합니다. 비교는 변경 없음·추가와 삭제와 수정 각 1건·모든 파일 내용 변경으로 나누며, 파일 30,000개와 디렉터리 300개로 구성된 합성 스냅샷에서도 같은 세 조건을 측정합니다. 각 측정은 빌드한 Rust 실행 파일을 새 프로세스로 호출하고 예열 3회 후 15회의 중앙값을 표시합니다.
+`cargo test`는 Rust 단위 검사와 CLI 통합 검사를 실행합니다. 테스트 자료를 만들 때 Git과 Windows의 `pwsh`와 `cmd.exe` 내장 `mklink`(정션) 또는 Unix의 `mkfifo`(이름 있는 파이프)를 사용합니다. 이전 Node CLI로 생성한 고정 기록, 무시된 파일과 링크, 변경 없는 실행, 중복 경로, 잘못된 해시와 바이트 수를 검사합니다. 손상된 UTF-8이 어느 쪽 기록에 있든 오류로 처리하는지, 큰 변경 목록을 마지막 요약까지 출력하는지도 검사합니다.
+
+성능 측정은 저장소 루트에서 위의 릴리스 빌드를 마친 뒤 Rust 벤치마크 드라이버로 실행합니다. 마지막 인자에는 비교하려는 다른 리비전의 실행 파일 경로도 지정할 수 있습니다. Windows에서는 실행 파일 경로 끝에 `.exe`를 붙입니다.
+
+```sh
+cargo run --release --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml --example benchmark -- tools/eval-workspace-snapshot/target/release/eval-workspace-snapshot
+```
+
+드라이버는 공방 자료와 1,001개 파일의 합성 작업 폴더에서 `record` 결과를 검사합니다. 예상 경로·종류·크기·SHA-256은 측정 대상 CLI와 독립적으로 준비합니다. `compare`는 변경 없음, 추가·삭제·수정 각 1건, 모든 파일 내용 변경의 세 조건으로 실행합니다. 소수 변경에서는 크기가 같은 파일의 SHA-256만 달라져도 수정으로 보고해야 합니다. 파일 30,000개와 디렉터리 300개로 구성된 합성 스냅샷에서도 세 비교를 반복합니다.
+
+각 측정은 새 CLI 프로세스의 시작부터 출력 수집까지 걸린 시간이며 예열 3회 뒤 15회의 중앙값을 표시합니다. 자료 준비와 출력 검증은 측정 구간 밖에서 수행합니다. 짧은 기능 검사에는 실행 파일 경로 앞에 `--smoke`를 붙입니다. CI에서는 Ubuntu와 Windows에서 공방 자료의 기록과 세 가지 비교를 한 번씩 검사합니다.
 
 평가용 스텁은 작업 경로 뒤에서 `--status 503`과 `--status=503` 두 표기를 모두 받습니다. `--status`는 최종 HTTP 상태 코드(200~599), `--delay`는 밀리초(0~2147483647), `--port`는 포트 번호(0~65535, 0은 자동 할당)입니다. 모르는 옵션, 중복 옵션, 빠지거나 잘못된 값은 오류로 종료하며 서버를 시작하지 않습니다. 스텁을 수정하면 `node --test tests/eval-stub-server.test.js`로 작업 경로, 옵션 처리, 예약 요청 형식을 확인합니다.
 
-스텁의 타입 검사는 저장소 루트에서 `npm ci` 후 `npm run typecheck`로 실행합니다. TypeScript가 JavaScript 소스를 `strict`와 `checkJs`로 검사합니다. 스텁은 기존과 같이 Node에서 직접 실행하며 스킬 설치 ZIP에는 이 개발 도구가 들어가지 않습니다.
+예약 스텁과 Mixdog 매니페스트 생성기의 타입 검사는 저장소 루트에서 `npm ci` 후 `npm run typecheck`로 실행합니다. TypeScript가 JavaScript 소스를 `strict`와 `checkJs`로 검사합니다. 스텁은 기존과 같이 Node에서 직접 실행하며 스킬 설치 ZIP에는 이 개발 도구가 들어가지 않습니다.
 
 배포 파일을 갱신할 때는 [표준 폴더](../skills/frontend-skill/)에서 본문과 참조를 수정합니다. Mixdog의 선택 문구는 [패키징 스크립트](../scripts/package-mixdog.py)의 `TRIGGER`에서 관리합니다. 표준 `SKILL.md`의 최상위에 `when_to_use`가 이미 있으면 빈 값이어도 ZIP을 교체하기 전에 중단합니다. 배포할 스킬 변경을 스테이징하세요. 생성기 입력인 `scripts/package-mixdog.py`, `scripts/mixdog-manifest.mjs`, `package.json`, `package-lock.json`을 수정했다면 해당 파일도 스테이징합니다.
 
@@ -417,7 +427,7 @@ python scripts/package-mixdog.py --check-release
 
 의존성을 설치한 뒤 오프라인에서 확인하려면 `python scripts/package-mixdog.py --check`를 사용합니다. 빌드와 같은 메타데이터 검사를 거친 뒤, 한 번 고정한 Git 인덱스의 원본으로 재생성한 ZIP과 같은 시점의 스테이징된 ZIP을 바이트 단위로 비교합니다. 스테이징된 ZIP이 누락되거나 오래됐으면 실패합니다.
 
-`--check-release`는 같은 바이트 비교를 통과한 스테이징 ZIP을 임시 폴더에 풀고, GitHub에서 고정한 Mixdog 리비전(`8382c929c3d7ae5c6692136c67c63be821838bc0`)의 공식 검증기를 가져와 그 안의 `frontend-skill/`에 실행합니다. 검증기가 오류를 반환하면 배포 검사가 실패합니다. GitHub Actions에서도 푸시와 풀 리퀘스트마다 두 검사를 실행합니다. [Mixdog 공식 검증기](https://github.com/tribgames/mixdog/blob/8382c929c3d7ae5c6692136c67c63be821838bc0/src/defaults/skills/skill-creator/scripts/validate-skill.mjs) · [배포 검사 워크플로](../.github/workflows/mixdog-package.yml)
+`--check-release`는 같은 바이트 비교를 통과한 스테이징 ZIP을 임시 폴더에 풀고, GitHub에서 고정한 Mixdog 리비전(`8382c929c3d7ae5c6692136c67c63be821838bc0`)의 공식 검증기를 가져와 그 안의 `frontend-skill/`에 실행합니다. 검증기가 오류를 반환하면 배포 검사가 실패합니다. GitHub Actions는 푸시와 풀 리퀘스트마다 Ubuntu·Windows에서 오프라인 패키징 테스트를 실행하고, Ubuntu에서 공식 검증기를 한 번 실행합니다. [Mixdog 공식 검증기](https://github.com/tribgames/mixdog/blob/8382c929c3d7ae5c6692136c67c63be821838bc0/src/defaults/skills/skill-creator/scripts/validate-skill.mjs) · [배포 검사 워크플로](../.github/workflows/mixdog-package.yml)
 
 Codex의 `quick_validate.py`에는 표준 폴더를 전달합니다. 설치 확인 시 세 호스트 모두 `frontend-skill`이 목록에 나타나는지, 이름으로 호출하면 해당 본문과 참조를 읽을 수 있는지 확인합니다.
 

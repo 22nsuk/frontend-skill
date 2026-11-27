@@ -187,6 +187,43 @@ fn rejects_unescaped_control_characters_in_keys() {
 }
 
 #[test]
+fn rejects_invalid_utf8_in_either_snapshot() {
+    let temp = tempdir().unwrap();
+    let before = temp.path().join("before");
+    let after = temp.path().join("after");
+    let entry = r#"{"path":"price-�.txt","type":"dir"}"#;
+    snapshot(&before, "/site", "1", entry);
+    snapshot(&after, "/site", "2", entry);
+    assert_eq!(compare(&before, &after, 0), CLEAN);
+
+    let mut bytes = fs::read(&after).unwrap();
+    let index = bytes.windows(3).position(|w| w == "�".as_bytes()).unwrap();
+    bytes.splice(index..index + 3, [0xff]);
+    fs::write(&after, bytes).unwrap();
+    for (first, second) in [(&before, &after), (&after, &before)] {
+        assert!(compare(first, second, 2).contains("Cannot read snapshot"));
+    }
+}
+
+#[test]
+fn captures_a_large_change_report_through_its_summary() {
+    let temp = tempdir().unwrap();
+    let before = temp.path().join("before");
+    let after = temp.path().join("after");
+    let mut entries = Vec::new();
+    let mut expected = String::new();
+    for index in 0..4000 {
+        let path = format!("project/module-{index:04}");
+        entries.push(format!(r#"{{"path":"{path}","type":"dir"}}"#));
+        expected.push_str(&format!("added dir \"{path}\"\n"));
+    }
+    snapshot(&before, "/site", "1", "");
+    snapshot(&after, "/site", "2", &entries.join(","));
+    expected.push_str("4000 added, 0 removed, 0 changed\n");
+    assert_eq!(compare(&before, &after, 1), expected);
+}
+
+#[test]
 fn handles_utf16_roots_and_timestamp_order() {
     let temp = tempdir().unwrap();
     let before = temp.path().join("before");

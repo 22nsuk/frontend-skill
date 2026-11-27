@@ -1,20 +1,31 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
+/** @typedef {typeof import('yaml')} Yaml */
+
 const require = createRequire(import.meta.url);
 const folder = process.argv[2];
 const frontmatterPattern = /^(?:\uFEFF)?---[ \t]*(\r?\n)([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
+/** @returns {Yaml} */
 function loadYaml() {
-  const expected = require('../package-lock.json').packages['node_modules/yaml'].version;
+  /** @type {{ packages: { 'node_modules/yaml': { version: string } } }} */
+  const lockfile = require('../package-lock.json');
+  const expected = lockfile.packages['node_modules/yaml'].version;
   try {
-    if (require('../node_modules/yaml/package.json').version === expected) return require('../node_modules/yaml');
+    /** @type {{ version: string }} */
+    const installed = require('../node_modules/yaml/package.json');
+    if (installed.version === expected) return require('../node_modules/yaml');
   } catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'MODULE_NOT_FOUND') throw error;
   }
   throw new Error(`Packaging requires yaml@${expected}. Run npm ci in the repository root.`);
 }
 
+/**
+ * @param {Yaml} yaml
+ * @param {string} header
+ */
 function parseFrontmatter(yaml, header) {
   const lines = new yaml.LineCounter();
   const document = yaml.parseDocument(header, { lineCounter: lines, prettyErrors: false, strict: true, uniqueKeys: true });
@@ -23,9 +34,16 @@ function parseFrontmatter(yaml, header) {
     throw new Error('SKILL.md frontmatter must be a YAML block mapping');
   }
   const indent = lines.linePos(document.contents.range[0]).col - 1;
-  return { fields: document.toJS({ maxAliasCount: 100 }), indent };
+  /** @type {Record<string, unknown>} */
+  const fields = document.toJS({ maxAliasCount: 100 });
+  return { fields, indent };
 }
 
+/**
+ * @param {string} source
+ * @param {unknown} trigger
+ * @param {Yaml} yaml
+ */
 function generate(source, trigger, yaml) {
   const match = frontmatterPattern.exec(source);
   if (!match) throw new Error('SKILL.md must start with YAML frontmatter closed by a --- line');
@@ -54,10 +72,11 @@ function generate(source, trigger, yaml) {
 try {
   const input = readFileSync(0);
   const separator = input.indexOf(0x0a);
+  /** @type {unknown} */
   const trigger = JSON.parse(input.toString('ascii', 0, separator));
   const source = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(input.subarray(separator + 1));
   process.stdout.write(generate(source, trigger, loadYaml()));
 } catch (error) {
-  console.error(error.message);
+  console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 }

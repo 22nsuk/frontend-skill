@@ -94,8 +94,8 @@ fn file_size(value: &RawValue) -> Option<u64> {
 
 fn load(file: &Path) -> Result<Loaded, String> {
     let file_name = file.display();
-    let bytes = fs::read(file).map_err(|e| format!("Cannot read snapshot {file_name}: {e}"))?;
-    let json = String::from_utf8_lossy(&bytes);
+    let json =
+        fs::read_to_string(file).map_err(|e| format!("Cannot read snapshot {file_name}: {e}"))?;
     let invalid_format = || format!("Not a workspace snapshot from this tool: {file_name}");
     // The byte-string decoder used for v1 keys also accepts raw control characters.
     // Validate JSON syntax before decoding keys, preserving escaped lone surrogates.
