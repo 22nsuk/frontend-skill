@@ -1,0 +1,201 @@
+'use strict';
+
+// Pins the source-verifiable rows of the baseline table (기준 상태) in docs/evaluation.md.
+// The fixtures contain deliberate faults; a well-meant "fix" would silently invalidate the
+// evaluation cases. When a fixture change is intentional, update that table, re-measure
+// the rendered rows, and update these expectations in the same change.
+
+const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const test = require('node:test');
+
+const docs = path.resolve(__dirname, '../docs');
+const workshop = path.join(docs, 'eval-fixture');
+const newPage = path.join(docs, 'eval-new-page');
+const report = path.join(docs, 'eval-report');
+/** @param {...string} parts */
+const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
+
+/**
+ * Collect the declarations of each selector in a flat stylesheet (no nested blocks).
+ * @param {string} css
+ */
+function rules(css) {
+  /** @type {Map<string, Record<string, string>>} */
+  const found = new Map();
+  for (const [, selectors, body] of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const declarations = Object.fromEntries(body.split(';')
+      .map((declaration) => declaration.split(':'))
+      .filter((pair) => pair.length >= 2)
+      .map(([property, ...value]) => [property.trim(), value.join(':').trim()]));
+    for (const selector of selectors.split(',')) {
+      found.set(selector.trim(), { ...found.get(selector.trim()), ...declarations });
+    }
+  }
+  return found;
+}
+
+/** @param {string} value */
+const px = (value) => {
+  assert.match(value, /^\d+(\.\d+)?px$/);
+  return Number.parseFloat(value);
+};
+
+/** @param {string} csv */
+function parseCsv(csv) {
+  const [header, ...rows] = csv.trim().split(/\r?\n/).map((line) => line.split(','));
+  return rows.map((cells) => Object.fromEntries(header.map((name, i) => [name, cells[i] ?? ''])));
+}
+
+/** @param {string} source @param {string} tag */
+function elements(source, tag) {
+  return [...source.matchAll(new RegExp(`<${tag}\\b([^>]*)>([^<]*)`, 'g'))].map(([, attributes, text]) => ({
+    attributes: Object.fromEntries([...attributes.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value])),
+    text: text.trim(),
+  }));
+}
+
+/** @param {string} source @param {string} start @param {string} end */
+function between(source, start, end) {
+  const from = source.indexOf(start);
+  assert.notEqual(from, -1, `missing ${start}`);
+  const to = source.indexOf(end, from);
+  assert.notEqual(to, -1, `missing ${end} after ${start}`);
+  return source.slice(from, to);
+}
+
+test('fixture files carry no hints about the evaluation', () => {
+  for (const folder of [workshop, newPage, report]) {
+    for (const entry of fs.readdirSync(folder, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = path.join(entry.parentPath, entry.name);
+      assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /평가|채점|기준 상태|eval|baseline|rubric|TODO|FIXME|버그|\bbug/i, file);
+    }
+  }
+});
+
+test('workshop menu keeps the uneven spacing measured at 1280px and the narrow overflow', () => {
+  const html = read(workshop, 'index.html');
+  const css = rules(read(workshop, 'styles.css'));
+  const links = [...between(html, '<nav', '</nav>').matchAll(/<a href="([^"]+)"(?: class="([^"]+)")?>([^<]+)<\/a>/g)]
+    .map(([, href, className = '', label]) => ({ href, className, label }));
+  assert.deepEqual(links.map(({ href, label }) => [href, label]), [
+    ['#services', '서비스'], ['#prices', '요금'], ['#stats', '접수 현황'], ['#booking', '예약하기'],
+  ]);
+
+  const base = css.get('.site-nav a') ?? {};
+  const measured = links.map(({ className }) => {
+    const own = className ? css.get(`.site-nav a.${className}`) ?? {} : {};
+    const [, horizontal] = (own.padding ?? base.padding).split(/\s+/);
+    return { margin: px(own['margin-left'] ?? base['margin-left']), padding: px(horizontal) };
+  });
+  const boxGaps = measured.slice(1).map(({ margin }) => margin);
+  const labelGaps = measured.slice(1).map(({ margin, padding }, i) => measured[i].padding + margin + padding);
+  assert.deepEqual(boxGaps, [6, 20, 34]);
+  assert.deepEqual(labelGaps, [14, 28, 52]);
+  assert.equal(css.get('.site-nav')?.['white-space'], 'nowrap');
+});
+
+test('workshop logo, typeface and heading keep their original treatment', () => {
+  const source = read(workshop, 'styles.css');
+  const brand = rules(source).get('.brand') ?? {};
+  assert.equal(brand.background, 'linear-gradient(90deg, #6d28d9, #c026d3)');
+  assert.equal(brand['background-clip'], 'text');
+  assert.equal(brand.color, 'transparent');
+  assert.equal(source.match(/font-family\s*:/g)?.length, 1, 'only body declares a font family');
+  assert.match(rules(source).get('body')?.['font-family'] ?? '', /^"Pretendard"/);
+  assert.doesNotMatch(source, /keep-all/);
+  assert.match(read(workshop, 'index.html'), /<h1>고장 난 생활용품, 동네에서 고쳐 드립니다<\/h1>/);
+  assert.equal(rules(source).get('.booking-form input')?.border, '1px solid #c9c3d9');
+});
+
+test('workshop chart draws the missing April count as zero and has no text alternative', () => {
+  const html = read(workshop, 'index.html');
+  const svg = between(html, '<svg', '</svg>');
+  assert.doesNotMatch(svg, /<title|<desc|role=|aria-/);
+  assert.doesNotMatch(between(html, '<section id="stats">', '</section>'), /<table/);
+
+  // Grid lines run top to bottom in the same order as the tick labels.
+  const ticks = elements(between(svg, '<g class="ticks">', '</g>'), 'text').map(({ text }) => text);
+  const grid = elements(between(svg, '<g class="grid">', '</g>'), 'line').map(({ attributes }) => Number(attributes.y1));
+  assert.deepEqual(ticks, ['80', '60', '40', '20', '0']);
+  const [topY, zeroY] = [grid[0], grid[grid.length - 1]];
+  const perRequest = (zeroY - topY) / 80;
+  const bars = elements(between(svg, '<g class="bars">', '</g>'), 'rect').map(({ attributes }) => attributes);
+  const values = elements(between(svg, '<g class="values">', '</g>'), 'text').map(({ text }) => text);
+  const months = elements(between(svg, '<g class="months">', '</g>'), 'text').map(({ text }) => text);
+  const rows = parseCsv(read(workshop, 'data', 'requests.csv'));
+
+  assert.deepEqual(months, ['1월', '2월', '3월', '4월', '5월', '6월']);
+  assert.deepEqual(rows.map(({ month }) => month), ['2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06']);
+  for (const [i, row] of rows.entries()) {
+    const height = Number(bars[i].height);
+    assert.equal(Number(bars[i].y) + height, zeroY, `${row.month} bar starts at zero`);
+    if (row.month === '2024-04') {
+      assert.deepEqual([row.requests, row.note], ['', '접수 시스템 교체로 집계 누락']);
+      assert.equal(height, 0);
+      assert.equal(values[i], '0');
+    } else {
+      assert.equal(height, Number(row.requests) * perRequest, `${row.month} bar height`);
+      assert.equal(values[i], row.requests);
+    }
+  }
+  assert.match(html, /<figcaption>2024년 1~6월 월별 수리 접수\(건\)<\/figcaption>/);
+});
+
+test('workshop booking announces success early and discards input on failure', () => {
+  const script = read(workshop, 'app.js');
+  const accepted = script.indexOf("status.textContent = '예약 신청이 접수되었습니다.'");
+  assert.ok(accepted !== -1 && accepted < script.indexOf('fetch('), 'success text is shown before the request');
+  assert.match(script, /fetch\('api\/bookings', \{\s*method: 'POST',\s*headers: \{ 'Content-Type': 'application\/json' \}/);
+  assert.match(between(script, '.catch(', '});'), /form\.reset\(\);\s*status\.textContent = '문제가 발생했습니다\.';/);
+  assert.doesNotMatch(script, /disabled/);
+  assert.match(read(workshop, 'index.html'), /<p id="booking-status" class="booking-status"><\/p>/);
+});
+
+test('workshop retry check fails only on the first non-retryable 4xx', () => {
+  const result = spawnSync(process.execPath, [path.join(workshop, 'server', 'check-retry.js')], {
+    encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.equal(lines.filter((line) => line.startsWith('ok - ')).length, 12);
+  assert.deepEqual(lines.filter((line) => !line.startsWith('ok - ')), [
+    'not ok - rejects every non-retryable 4xx without waiting',
+    '  Missing expected rejection: HTTP 400 must reject immediately',
+  ]);
+});
+
+test('library report hides its conditions and source when printed', () => {
+  const html = read(report, 'index.html');
+  const style = between(html, '<style>', '</style>');
+  assert.match(style, /main \{ width: 52rem;/);
+  assert.match(between(html, '@media print', '</style>'), /\.filter, \.notes \{ display: none; \}/);
+  const notes = between(html, '<section class="notes">', '</section>');
+  assert.match(notes, /솔빛 분관은 5월에 서가 교체로 10일간 휴관했습니다\./);
+  assert.match(notes, /<a href="visits\.csv">/);
+  assert.match(html.replace(notes, ''), /한 사람이 여러 번 방문하면 방문할 때마다 한 건으로 셉니다\./);
+
+  const tableRows = [...html.matchAll(/<tr><th scope="row">([^<]+)<\/th>((?:<td>[^<]+<\/td>)+)<\/tr>/g)]
+    .map(([, branch, cells]) => [branch, [...cells.matchAll(/<td>([^<]+)<\/td>/g)].map(([, value]) => value.replace(/,/g, ''))]);
+  const csv = parseCsv(read(report, 'visits.csv'));
+  assert.deepEqual(tableRows, ['마루', '솔빛'].map((branch) => [
+    branch, csv.filter((row) => row['분관'] === branch).map((row) => row['방문 건수']),
+  ]));
+  assert.deepEqual(csv.filter((row) => row['비고']).map((row) => [row['분관'], row['월'], row['비고']]), [
+    ['솔빛', '5', '서가 교체로 10일간 휴관'],
+  ]);
+});
+
+test('new-page material describes the booking steps without collecting data', () => {
+  const brief = read(newPage, 'brief.md');
+  assert.match(brief, /평일 오전 9시부터 오후 6시까지 방문합니다\. 야간·주말 방문은 제공하지 않습니다\./);
+  assert.match(brief, /방문 점검은 15,000원이며 수리를 진행하면 수리비에 포함됩니다\./);
+  assert.match(brief, /\[예약 안내\]\(booking\.html\)/);
+  const booking = read(newPage, 'booking.html');
+  assert.doesNotMatch(booking, /<form|<input|<script/);
+  assert.match(booking, /양쪽이 시간에 동의하면 예약이 확정됩니다\./);
+  assert.deepEqual(fs.readdirSync(newPage).sort(), ['booking.html', 'brief.md']);
+});

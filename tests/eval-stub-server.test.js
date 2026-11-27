@@ -101,6 +101,8 @@ test('serves static files only within the resolved workspace', { timeout: 8000 }
   await fs.mkdir(sibling);
   await fs.writeFile(path.join(sibling, 'empty.css'), '');
   await fs.writeFile(path.join(assets, 'theme.css'), 'body { color: navy; }');
+  await fs.writeFile(path.join(assets, 'brand.woff2'), 'wOF2');
+  await fs.writeFile(path.join(assets, 'PHOTO.PNG'), 'png');
   const linkType = process.platform === 'win32' ? 'junction' : 'dir';
   await fs.symlink(assets, path.join(workspace, 'theme'), linkType);
   await fs.symlink(sibling, path.join(workspace, 'other'), linkType);
@@ -112,6 +114,12 @@ test('serves static files only within the resolved workspace', { timeout: 8000 }
     assert.match(response.headers.get('content-type'), /^text\/css/);
     assert.equal(await response.text(), 'body { color: navy; }');
   }
+  for (const [file, type] of [['brand.woff2', 'font/woff2'], ['PHOTO.PNG', 'image/png']]) {
+    const response = await fetch(`${origin}/assets/${file}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), type);
+    await response.arrayBuffer();
+  }
   for (const method of ['GET', 'HEAD']) {
     const denied = await fetch(`${origin}/other/empty.css`, { method });
     assert.equal(denied.status, 403);
@@ -121,6 +129,33 @@ test('serves static files only within the resolved workspace', { timeout: 8000 }
   assert.equal(head.status, 200);
   assert.equal(await head.text(), '');
   assert.equal((await fetch(`${origin}/missing.css`)).status, 404);
+});
+
+test('tells the browser not to reuse responses from another workspace', { timeout: 8000 }, async (t) => {
+  const { origin } = await startServer(t, fixture, ['--port=0', '--delay=0']);
+  const requests = [
+    [`${origin}/`, undefined, 200],
+    [`${origin}/missing.css`, undefined, 404],
+    [`${origin}/index.html`, { method: 'PUT' }, 405],
+    [`${origin}/api/bookings`, booking, 201],
+    [`${origin}/api/bookings`, { ...booking, body: '{' }, 400],
+  ];
+  for (const [url, init, expected] of requests) {
+    const response = await fetch(url, init);
+    assert.equal(response.status, expected, url);
+    assert.equal(response.headers.get('cache-control'), 'no-store', url);
+    await response.arrayBuffer();
+  }
+});
+
+test('explains how to recover when the port is already in use', { timeout: 8000 }, async (t) => {
+  const { origin } = await startServer(t, fixture, ['--port=0']);
+  const port = new URL(origin).port;
+  const result = spawnSync(process.execPath, [script, fixture, '--port', port], { encoding: 'utf8', timeout: 3000 });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, new RegExp(`Port ${port} on 127\\.0\\.0\\.1 is already in use.*--port`));
+  assert.doesNotMatch(result.stderr, /Unhandled|\n\s+at /);
+  assert.doesNotMatch(result.stdout, /serving /);
 });
 
 for (const status of [201, 503]) {

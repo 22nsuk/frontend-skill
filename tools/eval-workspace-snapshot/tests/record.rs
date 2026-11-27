@@ -355,6 +355,40 @@ fn rejects_unrepresentable_symlink_targets_without_publishing() {
     assert!(!snapshot.exists());
 }
 
+#[test]
+fn names_the_entry_that_cannot_be_read() {
+    let temp = tempdir();
+    let workspace = temp.path().join("site");
+    fs::create_dir_all(workspace.join("sub")).unwrap();
+    let locked = workspace.join("sub/locked.txt");
+    fs::write(&locked, "x").unwrap();
+    // Another process holding the file without sharing is common on Windows.
+    #[cfg(windows)]
+    let _held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&locked)
+            .unwrap()
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::File::open(&locked).is_ok() {
+            return; // A privileged user can still read the file.
+        }
+    }
+    let snapshot = temp.path().join("unreadable.json");
+    let error = cli("record", &[&workspace, &snapshot], 2);
+    assert!(
+        error.starts_with("Cannot read \"sub/locked.txt\": "),
+        "{error}"
+    );
+    assert!(!snapshot.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn records_fifo_as_other() {

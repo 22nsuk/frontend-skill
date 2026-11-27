@@ -1,2 +1,4 @@
 /node_modules/
 /tools/eval-workspace-snapshot/target/
+# Created by the Mixdog host when it opens this folder.
+/.mixdog/
