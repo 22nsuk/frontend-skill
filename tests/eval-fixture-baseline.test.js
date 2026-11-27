@@ -24,10 +24,15 @@ const read = (...parts) => fs.readFileSync(path.join(...parts), 'utf8');
 let browser;
 test.after(async () => { await browser?.close(); });
 
-async function openFixture(t, directory) {
+async function openPage(t) {
   browser ??= await chromium.launch();
   const page = await browser.newPage({ offline: true, viewport: { width: 1280, height: 800 } });
   t.after(() => page.close());
+  return page;
+}
+
+async function openFixture(t, directory) {
+  const page = await openPage(t);
   await page.goto(pathToFileURL(path.join(directory, 'index.html')).href);
   return page;
 }
@@ -74,12 +79,43 @@ function between(source, start, end) {
   return source.slice(from, to);
 }
 
-test('fixture files carry no hints about the evaluation', () => {
+// CSS comments and strings can give away the exercise. Bare CSS keywords such as
+// "baseline" also occur in ordinary layout declarations and feature queries.
+function cssHintText(css) {
+  return css.replace(/\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\bbaseline\b/gi,
+    (token) => token.toLowerCase() === 'baseline' ? '' : token);
+}
+
+test('fixture files carry no hints about the evaluation', async (t) => {
+  const page = await openPage(t);
+  const hint = /평가|채점|기준 상태|eval|baseline|rubric|TODO|FIXME|버그|\bbug/i;
   for (const folder of [workshop, newPage, report]) {
     for (const entry of fs.readdirSync(folder, { recursive: true, withFileTypes: true })) {
       if (!entry.isFile()) continue;
       const file = path.join(entry.parentPath, entry.name);
-      assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /평가|채점|기준 상태|eval|baseline|rubric|TODO|FIXME|버그|\bbug/i, file);
+      const source = read(file);
+      const extension = path.extname(file).toLowerCase();
+      if (extension === '.css') {
+        assert.doesNotMatch(cssHintText(source), hint, file);
+      } else if (extension === '.html') {
+        const { markup, styles } = await page.evaluate((html) => {
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          const styles = [];
+          for (const node of doc.querySelectorAll('style')) {
+            styles.push(node.textContent);
+            node.textContent = '';
+          }
+          for (const node of doc.querySelectorAll('[style]')) {
+            styles.push(node.getAttribute('style'));
+            node.removeAttribute('style');
+          }
+          return { markup: new XMLSerializer().serializeToString(doc), styles };
+        }, source);
+        assert.doesNotMatch(markup, hint, file);
+        for (const css of styles) assert.doesNotMatch(cssHintText(css), hint, file);
+      } else {
+        assert.doesNotMatch(source, hint, file);
+      }
     }
   }
 });
@@ -123,11 +159,18 @@ test('workshop logo, typeface and heading keep their original treatment', () => 
   assert.equal(rules(source).get('.booking-form input')?.border, '1px solid #c9c3d9');
 });
 
-test('workshop chart draws the missing April count as zero and has no text alternative', () => {
+test('workshop chart draws the missing April count as zero and has no text alternative', async (t) => {
   const html = read(workshop, 'index.html');
   const svg = between(html, '<svg', '</svg>');
   assert.doesNotMatch(svg, /<title|<desc|role=|aria-/);
   assert.doesNotMatch(between(html, '<section id="stats">', '</section>'), /<table/);
+  const page = await openFixture(t, workshop);
+  assert.equal(await page.locator('#stats').ariaSnapshot(), [
+    '- heading "접수 현황" [level=2]',
+    '- figure "2024년 1~6월 월별 수리 접수(건)":',
+    '  - img: 80 60 40 20 0 접수(건) 42 38 51 0 64 57 1월 2월 3월 4월 5월 6월',
+    '  - text: 2024년 1~6월 월별 수리 접수(건)',
+  ].join('\n'), 'chart accessibility tree');
 
   // Grid lines run top to bottom in the same order as the tick labels.
   const ticks = elements(between(svg, '<g class="ticks">', '</g>'), 'text').map(({ text }) => text);
@@ -250,7 +293,10 @@ test('library report hides its conditions and source when printed', async (t) =>
   const notes = between(html, '<section class="notes">', '</section>');
   assert.match(notes, /솔빛 분관은 5월에 서가 교체로 10일간 휴관했습니다\./);
   assert.match(notes, /<a href="visits\.csv">/);
-  assert.match(html.replace(notes, ''), /한 사람이 여러 번 방문하면 방문할 때마다 한 건으로 셉니다\./);
+  const countingRule = page.getByText('한 사람이 여러 번 방문하면 방문할 때마다 한 건으로 셉니다.');
+  assert.ok(await countingRule.isVisible(), 'repeat-visit counting rule visible in print');
+  const reportYear = '2025';
+  assert.ok(await page.getByText(`${reportYear}년 2분기`).isVisible(), 'report period visible in print');
 
   const [branchHeader, ...months] = elements(between(html, '<thead>', '</thead>'), 'th').map(({ text }) => text);
   assert.equal(branchHeader, '분관');
@@ -260,11 +306,11 @@ test('library report hides its conditions and source when printed', async (t) =>
   const visits = tableRows.flatMap(([, branch, cells]) => {
     const counts = elements(cells, 'td');
     assert.equal(counts.length, months.length, branch);
-    return counts.map(({ text }, i) => [branch, months[i], text.replace(/,/g, '')]);
+    return counts.map(({ text }, i) => [branch, reportYear, months[i], text.replace(/,/g, '')]);
   });
   const csv = parseCsv(read(report, 'visits.csv'));
-  const sourceVisits = csv.map((row) => [row['분관'], `${row['월']}월`, row['방문 건수']]);
-  assert.deepEqual(visits.sort(), sourceVisits.sort(), 'visit counts by branch and month');
+  const sourceVisits = csv.map((row) => [row['분관'], row['연도'], `${row['월']}월`, row['방문 건수']]);
+  assert.deepEqual(visits.sort(), sourceVisits.sort(), 'visit counts by branch, year and month');
   assert.deepEqual(csv.filter((row) => row['비고']).map((row) => [row['분관'], row['월'], row['비고']]), [
     ['솔빛', '5', '서가 교체로 10일간 휴관'],
   ]);
