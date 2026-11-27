@@ -19,7 +19,8 @@ if (!workspace?.trim() || workspace.startsWith('--') ||
     !fs.statSync(workspace, { throwIfNoEntry: false })?.isDirectory()) {
   usageError('Expected an existing workspace directory.');
 }
-const root = path.resolve(workspace);
+const root = fs.realpathSync.native(workspace);
+const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
 const limits = new Map([
   ['--status', [200, 599]],
   ['--delay', [0, 2147483647]],
@@ -92,8 +93,14 @@ function handleBooking(req, res) {
   });
 }
 
-http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://127.0.0.1');
+http.createServer(async (req, res) => {
+  let url;
+  try {
+    url = new URL(req.url, 'http://127.0.0.1');
+  } catch {
+    res.writeHead(400).end();
+    return;
+  }
 
   if (req.method === 'POST' && url.pathname === '/api/bookings') {
     handleBooking(req, res);
@@ -113,18 +120,22 @@ http.createServer((req, res) => {
     res.writeHead(400).end();
     return;
   }
-  if (!file.startsWith(root + path.sep)) {
+  if (!file.startsWith(rootPrefix)) {
     res.writeHead(403).end();
     return;
   }
-  fs.readFile(file, (error, data) => {
-    if (error) {
-      res.writeHead(404).end();
+  try {
+    const target = await fs.promises.realpath(file);
+    if (!target.startsWith(rootPrefix)) {
+      res.writeHead(403).end();
       return;
     }
+    const data = await fs.promises.readFile(target);
     res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' });
     res.end(req.method === 'HEAD' ? undefined : data);
-  });
+  } catch {
+    res.writeHead(404).end();
+  }
 }).listen(port, '127.0.0.1', function () {
   console.log(`serving ${root} at http://127.0.0.1:${this.address().port}/ (POST /api/bookings -> ${status} after ${delay} ms)`);
 });

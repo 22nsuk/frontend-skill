@@ -29,6 +29,6 @@ Use this reference when an edit affects input, navigation, retained state, submi
 
 ## Check the changed behavior
 
-When a submission changes, try its established keyboard and pointer paths with valid input. Check that client-side validation still blocks the inputs it previously rejected and that server-side errors reach the user. Compare the test request's method, destination, encoding, and field values with the existing contract. For a navigation layout change, activate the destination at the affected width using the available menu or scrolling interaction.
+When a submission changes, try its established keyboard and pointer paths with valid input. Check that client-side validation still blocks the inputs it previously rejected and that server-side errors reach the user. After a recoverable failure in the sandbox or local mock, retry with the retained input. Confirm that the retry produces a single submission and that the displayed state reflects the response. Compare the test request's method, destination, encoding, and field values with the existing contract. For a navigation layout change, activate the destination at the affected width using the available menu or scrolling interaction.
 
 For an illustrative product preview, make simulated behavior and sample data clear. Inspect its presentation and any implemented interactions, but do not treat a convincing mockup as evidence of persistence, permissions, or service integration.
