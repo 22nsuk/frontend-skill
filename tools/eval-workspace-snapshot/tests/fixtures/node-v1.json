@@ -1,0 +1,34 @@
+{
+ "format": "eval-workspace-snapshot/1",
+ "root": "/site",
+ "recordedAt": "2000-01-01T00:00:00.000Z",
+ "entries": [
+  {
+   "path": "dir",
+   "type": "dir"
+  },
+  {
+   "path": "dir/漢.bin",
+   "type": "file",
+   "size": 3,
+   "sha256": "712450d3c4a79eea9509e75dc1dacdeff58034df538536cfae2da882bd8a0c50"
+  },
+  {
+   "path": "linked",
+   "type": "symlink",
+   "target": "/outside"
+  },
+  {
+   "path": "𐀀",
+   "type": "file",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "path": "",
+   "type": "file",
+   "size": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+ ]
+}

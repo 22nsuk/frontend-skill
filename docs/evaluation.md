@@ -33,9 +33,11 @@
 | [`docs/eval-new-page/`](eval-new-page/) | 업체 원자료 `brief.md`와 링크 목적지 `booking.html`. 기존 소개 페이지나 스타일시트가 없음 | 사례 6에만 제공 |
 | [`docs/eval-report/`](eval-report/) | 두 분관의 방문 집계를 비교하고 분관을 선택할 수 있는 기존 보고서와 원자료 `visits.csv` | 사례 7에만 제공 |
 | [`docs/eval-stub-server.js`](eval-stub-server.js) | 평가자용 로컬 서버. 작업 폴더의 실제 경로 안에 있는 파일만 `127.0.0.1`에서 정적으로 제공하고, `POST /api/bookings`에 지정한 상태 코드와 지연으로 응답하며 요청과 응답 상태를 기록 | 제공하지 않음 |
-| [`scripts/eval-workspace-snapshot.js`](../scripts/eval-workspace-snapshot.js) | 사례 2에서 Git이 무시하는 파일까지 포함해 작업 폴더의 실행 전후 상태를 비교 | 제공하지 않음 |
+| [Rust 스냅샷 CLI](../tools/eval-workspace-snapshot/) | 사례 2에서 Git이 무시하는 파일까지 포함해 작업 폴더의 실행 전후 상태를 비교 | 제공하지 않음 |
 
 자료에는 외부 글꼴·이미지·스크립트, 패키지 설치, 실제 서비스 주소가 없습니다. 예약 폼은 현재 페이지와 같은 서버의 `api/bookings`로 요청합니다. 운영 사이트에 올리지 말고, 아래의 로컬 스텁 주소에서 가상 입력으로만 시험하세요. 평가에는 Git, Node.js(별도 패키지 없음), 개발자 도구가 있는 Chromium 계열 브라우저를 씁니다.
+
+사례 2의 평가자는 [스냅샷 CLI 빌드 방법](#확인-방법과-범위)에 따라 Rust와 Cargo로 실행 파일을 미리 준비합니다. 이후에는 그 실행 파일을 오프라인에서도 재사용할 수 있습니다.
 
 ### 기준 상태 (평가자 전용)
 
@@ -188,13 +190,13 @@ console.table({ '클릭 영역': gaps(boxes), '문구': gaps(labels) });
 이 페이지 디자인을 검토하고 개선 제안만 정리해 주세요. 파일은 수정하지 마세요.
 ```
 
-평가자는 실행자가 접근할 수 없는 작업 폴더 **밖**에 빈 증거 폴더를 준비하고 그 절대 경로를 `$evidence`로 둡니다. 저장소 루트에서 최종 기준 커밋을 확정한 뒤 첫 명령을 실행하고 바로 요청을 보냅니다. 두 번째와 세 번째 명령은 첫 완료 응답 직후, 평가자가 작업 폴더를 조작하기 전에 실행합니다. [파일 비교 도구](../scripts/eval-workspace-snapshot.js)는 실행자에게 복사하지 않습니다.
+평가자는 실행자가 접근할 수 없는 작업 폴더 **밖**에 빈 증거 폴더를 준비하고 그 절대 경로를 `$evidence`로 둡니다. 저장소 루트에서 최종 기준 커밋을 확정한 뒤 첫 명령을 실행하고 바로 요청을 보냅니다. 두 번째와 세 번째 명령은 첫 완료 응답 직후, 평가자가 작업 폴더를 조작하기 전에 실행합니다. [파일 비교 도구](../tools/eval-workspace-snapshot/)는 실행자에게 복사하지 않습니다.
 
 ```sh
-node scripts/eval-workspace-snapshot.js record "$run" "$evidence/before.json"
+./tools/eval-workspace-snapshot/target/release/eval-workspace-snapshot record "$run" "$evidence/before.json"
 # 실행자에게 요청하고 응답이 끝난 뒤:
-node scripts/eval-workspace-snapshot.js record "$run" "$evidence/after.json"
-node scripts/eval-workspace-snapshot.js compare "$evidence/before.json" "$evidence/after.json"
+./tools/eval-workspace-snapshot/target/release/eval-workspace-snapshot record "$run" "$evidence/after.json"
+./tools/eval-workspace-snapshot/target/release/eval-workspace-snapshot compare "$evidence/before.json" "$evidence/after.json"
 ```
 
 `compare` 종료 코드 0은 전후 일치, 1은 차이 발견, 2는 비교 오류(미관찰)입니다. 파일 경로·종류·내용의 SHA-256과 바이트 수를 기록합니다. 중복 경로, 16진수 64자 형식이 아닌 해시, 0 이상의 안전한 정수가 아닌 바이트 수가 있으면 비교 오류입니다. 링크는 연결 대상만 비교합니다. 최상위 `.git` 내부, 권한·시각, 중간에 썼다가 복원한 내용은 이 검사로 판정하지 않습니다. 다음 두 항목을 각각 판정하며 사례 통과에는 둘 다 필요합니다.
@@ -379,9 +381,20 @@ git -C "$restore" rev-parse HEAD
 
 ## 확인 방법과 범위
 
-검토 전용 파일 비교 도구를 수정하면 `node --test tests/eval-workspace-snapshot.test.js`로 무시된 파일, 변경 없는 실행, 링크, 중복 경로와 잘못된 해시·바이트 수를 포함한 입력 검사를 확인합니다.
+이전 Node 스냅샷 도구를 호출하던 스크립트는 실행 명령을 아래에서 빌드한 바이너리 경로로 바꾸세요. `record <작업 폴더> <새 JSON 파일>`, `compare <이전 JSON> <이후 JSON>`의 인자와 종료 코드(0 동일 또는 기록 성공, 1 변경, 2 오류)는 같습니다. 보관한 `eval-workspace-snapshot/1` JSON은 변환 없이 읽습니다. 경로와 링크 대상을 UTF-16 코드 단위로 비교하므로, JSON에 이스케이프된 단독 서로게이트도 대체 문자와 구별해 변경 목록에 표시합니다.
+
+저장소 루트에서 다음 명령으로 [검토 전용 사례](#2-검토-전용)에 쓸 실행 파일을 빌드하고 검사합니다. 기본 출력 경로는 `tools/eval-workspace-snapshot/target/release/eval-workspace-snapshot`입니다(Windows는 `.exe`).
+
+```text
+cargo build --release --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml
+cargo test --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml
+```
+
+`cargo test`는 Rust 단위 검사와 CLI 통합 검사를 실행합니다. 테스트 자료를 만들 때 Git과 Windows의 `pwsh`(정션) 또는 Unix의 `mkfifo`(이름 있는 파이프)를 사용합니다. 이전 Node CLI로 생성한 고정 기록, 무시된 파일과 링크, 변경 없는 실행, 중복 경로, 잘못된 해시와 바이트 수를 검사합니다. 성능 측정은 `node scripts/benchmark-workspace-snapshot.js <Rust 실행 파일 경로>`로 실행합니다. 실제 공방 자료와 1,001개 파일의 합성 작업 폴더에서 Rust 실행 파일을 매번 새 프로세스로 호출해 예열 3회 후 15회의 중앙값을 표시합니다.
 
 평가용 스텁은 작업 경로 뒤에서 `--status 503`과 `--status=503` 두 표기를 모두 받습니다. `--status`는 최종 HTTP 상태 코드(200~599), `--delay`는 밀리초(0~2147483647), `--port`는 포트 번호(0~65535, 0은 자동 할당)입니다. 모르는 옵션, 중복 옵션, 빠지거나 잘못된 값은 오류로 종료하며 서버를 시작하지 않습니다. 스텁을 수정하면 `node --test tests/eval-stub-server.test.js`로 작업 경로, 옵션 처리, 예약 요청 형식을 확인합니다.
+
+스텁의 타입 검사는 저장소 루트에서 `npm ci` 후 `npm run typecheck`로 실행합니다. TypeScript가 JavaScript 소스를 `strict`와 `checkJs`로 검사합니다. 스텁은 기존과 같이 Node에서 직접 실행하며 스킬 설치 ZIP에는 이 개발 도구가 들어가지 않습니다.
 
 배포 파일을 갱신할 때는 [표준 폴더](../skills/frontend-skill/)에서 본문과 참조를 수정합니다. Mixdog의 선택 문구는 [패키징 스크립트](../scripts/package-mixdog.py)의 `TRIGGER`에서만 관리합니다. 표준 `SKILL.md`의 최상위에 `when_to_use`를 두지 마세요. 빈 값이라도 이미 있으면 ZIP을 교체하지 않고 빌드를 중단합니다. 배포할 스킬 변경을 스테이징하고 스크립트도 수정했다면 `git add -- scripts/package-mixdog.py`를 실행하세요. `git diff --cached -- skills/frontend-skill scripts/package-mixdog.py`로 배포할 내용을 확인합니다.
 

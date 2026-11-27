@@ -1,10 +1,12 @@
 """Build or verify the Mixdog ZIP using the staged frontend-skill files."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import re
 from pathlib import Path
-from subprocess import check_output, run
+from subprocess import PIPE, Popen, check_output
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile, ZipInfo
 
@@ -105,12 +107,42 @@ def check_manifest(document: bytes) -> None:
         raise SystemExit(f"TRIGGER must have 1-{LISTING_LIMIT} UTF-16 code units and no angle brackets")
 
 
-def check_staged_zip(tree: str, rebuilt: Path) -> None:
+def read_staged_blob(batch: Popen, object_name: str) -> bytes | None:
+    request = object_name.encode("utf-8")
+    batch.stdin.write(request + b"\n")
+    batch.stdin.flush()
+    header = batch.stdout.readline()
+    if header == request + b" missing\n":
+        return None
+    fields = header.split()
+    if len(fields) != 3 or not fields[2].isdigit():
+        raise SystemExit(f"Could not read staged Git object: {object_name}")
+    _, object_type, size = fields
+    # Blob data may contain any byte. Read its declared length and then the separator.
+    length = int(size)
+    data = batch.stdout.read(length)
+    if len(data) != length or batch.stdout.read(1) != b"\n":
+        raise SystemExit(f"Incomplete staged Git object: {object_name}")
+    return data if object_type == b"blob" else None
+
+
+def check_staged_script(batch: Popen, tree: str) -> None:
+    script_path = SCRIPT.relative_to(ROOT).as_posix()
+    staged = read_staged_blob(batch, f"{tree}:{script_path}")
+    if staged is not None:
+        # Match read_text's universal newline handling for the comparison.
+        staged_text = staged.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        if staged_text == SCRIPT.read_text(encoding="utf-8"):
+            return
+    raise SystemExit(f"Stage the packaging script before building: git add -- {script_path}")
+
+
+def check_staged_zip(batch: Popen, tree: str, rebuilt: Path) -> None:
     archive_path = OUTPUT.relative_to(ROOT).as_posix()
-    staged = run(["git", "cat-file", "blob", f"{tree}:{archive_path}"], cwd=ROOT, capture_output=True)
-    if staged.returncode:
+    staged = read_staged_blob(batch, f"{tree}:{archive_path}")
+    if staged is None:
         raise SystemExit(f"Missing staged ZIP: git add -- {archive_path}")
-    if staged.stdout != rebuilt.read_bytes():
+    if staged != rebuilt.read_bytes():
         raise SystemExit(
             "Staged ZIP differs from staged sources. "
             f"Run python scripts/package-mixdog.py, then git add -- {archive_path}"
@@ -119,47 +151,48 @@ def check_staged_zip(tree: str, rebuilt: Path) -> None:
 
 def build(*, check_only: bool = False) -> None:
     tree = check_output(["git", "write-tree"], cwd=ROOT).decode().strip()
-    script_path = SCRIPT.relative_to(ROOT).as_posix()
-    staged_script = run(
-        ["git", "cat-file", "blob", f"{tree}:{script_path}"],
-        cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
-    )
-    if staged_script.returncode or staged_script.stdout != SCRIPT.read_text(encoding="utf-8"):
-        raise SystemExit(f"Stage the packaging script before building: git add -- {script_path}")
-
-    skill_tree = f"{tree}:{SOURCE.relative_to(ROOT).as_posix()}"
-    tracked = check_output(["git", "ls-tree", "-r", "-z", skill_tree], cwd=ROOT)
-    files = {}
-    for record in tracked.decode("utf-8").split("\0")[:-1]:
-        header, name = record.split("\t", 1)
-        mode, _, oid = header.split()
-        if mode not in {"100644", "100755"}:
-            raise ValueError(f"Expected a regular skill file: {name}")
-        files[name] = oid
-    if "SKILL.md" not in files:
-        raise ValueError("The standard SKILL.md must be in the Git index")
-    if not check_only:
-        OUTPUT.parent.mkdir(exist_ok=True)
-    # Build beside the destination for atomic replacement, or outside the checkout for a check.
-    with TemporaryDirectory(dir=None if check_only else OUTPUT.parent) as tmp:
-        rebuilt = Path(tmp) / OUTPUT.name
-        with ZipFile(rebuilt, "w") as archive:
-            # Git order and fixed ZIP metadata keep builds identical across checkouts.
-            for name, oid in files.items():
-                entry = ZipInfo(f"{SOURCE.name}/{name}")
-                entry.create_system = 3
-                entry.external_attr = 0o100644 << 16
-                data = check_output(["git", "cat-file", "blob", oid], cwd=ROOT)
-                if name == "SKILL.md":
-                    data = mixdog_manifest(data)
-                    check_manifest(data)
-                archive.writestr(entry, data)
-        if check_only:
-            check_staged_zip(tree, rebuilt)
-            print("Staged ZIP matches staged sources.")
-            return
-        rebuilt.replace(OUTPUT)
-    print(OUTPUT.relative_to(ROOT).as_posix())
+    with Popen(["git", "cat-file", "--batch"], cwd=ROOT, stdin=PIPE, stdout=PIPE) as batch:
+        check_staged_script(batch, tree)
+        skill_tree = f"{tree}:{SOURCE.relative_to(ROOT).as_posix()}"
+        tracked = check_output(["git", "ls-tree", "-r", "-z", skill_tree], cwd=ROOT)
+        files = {}
+        for record in tracked.decode("utf-8").split("\0")[:-1]:
+            header, name = record.split("\t", 1)
+            mode, _, oid = header.split()
+            if mode not in {"100644", "100755"}:
+                raise ValueError(f"Expected a regular skill file: {name}")
+            files[name] = oid
+        if "SKILL.md" not in files:
+            raise ValueError("The standard SKILL.md must be in the Git index")
+        if not check_only:
+            OUTPUT.parent.mkdir(exist_ok=True)
+        # Build beside the destination for atomic replacement, or outside the checkout for a check.
+        with TemporaryDirectory(dir=None if check_only else OUTPUT.parent) as tmp:
+            rebuilt = Path(tmp) / OUTPUT.name
+            with ZipFile(rebuilt, "w") as archive:
+                # Git order and fixed ZIP metadata keep builds identical across checkouts.
+                for name, oid in files.items():
+                    entry = ZipInfo(f"{SOURCE.name}/{name}")
+                    entry.create_system = 3
+                    entry.external_attr = 0o100644 << 16
+                    data = read_staged_blob(batch, oid)
+                    if data is None:
+                        raise SystemExit(f"Missing staged skill blob: {name}")
+                    if name == "SKILL.md":
+                        data = mixdog_manifest(data)
+                        check_manifest(data)
+                    archive.writestr(entry, data)
+            if check_only:
+                check_staged_zip(batch, tree, rebuilt)
+            batch.stdin.close()
+            if batch.wait():
+                raise SystemExit("Could not read staged Git blobs.")
+            if not check_only:
+                rebuilt.replace(OUTPUT)
+    if check_only:
+        print("Staged ZIP matches staged sources.")
+    else:
+        print(OUTPUT.relative_to(ROOT).as_posix())
 
 
 if __name__ == "__main__":

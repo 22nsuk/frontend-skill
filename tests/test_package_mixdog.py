@@ -192,6 +192,24 @@ class MixdogPackageTest(unittest.TestCase):
             self.assertEqual(archive.read("frontend-skill/reference.md"), b"Ready for release.\n")
             self.assertNotIn("frontend-skill/draft.md", archive.namelist())
 
+    def test_package_preserves_empty_and_repeated_binary_blobs_in_git_order(self):
+        binary = (bytes(range(256)) + b"\nobject missing\n\0") * 1024
+        blobs = {"a blob.bin": binary, "empty.bin": b"", "z duplicate.bin": binary}
+        for name, data in blobs.items():
+            (self.skill / name).write_bytes(data)
+        subprocess.run(["git", "add", "--", "skills"], cwd=self.root, check=True)
+
+        self.build()
+        with ZipFile(self.archive) as archive:
+            self.assertEqual(archive.namelist(), [
+                f"frontend-skill/{name}"
+                for name in ["SKILL.md", "a blob.bin", "empty.bin", "reference.md", "z duplicate.bin"]
+            ])
+            for name, data in blobs.items():
+                self.assertEqual(archive.read(f"frontend-skill/{name}"), data)
+        subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+        self.build("--check")
+
     def test_generator_change_must_be_staged_before_replacing_zip(self):
         self.build()
         original = self.archive.read_bytes()

@@ -11,6 +11,10 @@ const path = require('node:path');
 
 const args = process.argv.slice(2);
 const workspace = args[0];
+/**
+ * @param {string} message
+ * @returns {never}
+ */
 function usageError(message) {
   console.error(`${message}\nUsage: node docs/eval-stub-server.js <workspace> [--status N] [--delay MS] [--port N]`);
   process.exit(1);
@@ -21,21 +25,24 @@ if (!workspace?.trim() || workspace.startsWith('--') ||
 }
 const root = fs.realpathSync.native(workspace);
 const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
+/** @type {ReadonlyMap<string, readonly [number, number]>} */
 const limits = new Map([
   ['--status', [200, 599]],
   ['--delay', [0, 2147483647]],
   ['--port', [0, 65535]],
 ]);
+/** @type {Map<string, number>} */
 const options = new Map();
 for (let i = 1; i < args.length; i++) {
   const arg = args[i];
   const equals = arg.indexOf('=');
   const flag = equals === -1 ? arg : arg.slice(0, equals);
-  if (!limits.has(flag)) usageError(`Unknown argument: ${arg}`);
+  const range = limits.get(flag);
+  if (!range) usageError(`Unknown argument: ${arg}`);
   if (options.has(flag)) usageError(`Duplicate option: ${flag}`);
   const raw = equals === -1 ? args[++i] : arg.slice(equals + 1);
   const value = Number(raw);
-  const [min, max] = limits.get(flag);
+  const [min, max] = range;
   if (!/^\d+$/.test(raw ?? '') || value < min || value > max) {
     usageError(`${flag} expects an integer from ${min} to ${max}.`);
   }
@@ -45,6 +52,7 @@ const status = options.get('--status') ?? 201;
 const delay = options.get('--delay') ?? 2000;
 const port = options.get('--port') ?? 47613;
 
+/** @type {Readonly<Partial<Record<string, string>>>} */
 const types = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -56,9 +64,25 @@ const types = {
 };
 let bookings = 0;
 
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isJsonObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ */
 function handleBooking(req, res) {
   const n = ++bookings;
   console.log(`#${n} POST /api/bookings`);
+  /**
+   * @param {number} code
+   * @param {{id: string} | {error: string}} payload
+   */
   function respond(code, payload) {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(payload));
@@ -71,31 +95,37 @@ function handleBooking(req, res) {
     respond(415, { error: 'Expected application/json' });
     return;
   }
+  /** @type {Buffer[]} */
   const chunks = [];
   const limit = 64 * 1024;
   let bytes = 0;
-  req.on('data', (chunk) => {
+  req.on('data', (/** @type {Buffer} */ chunk) => {
     bytes += chunk.length;
     if (bytes <= limit) chunks.push(chunk);
   });
   req.on('end', () => {
     if (bytes > limit) return respond(413, { error: 'Booking body too large' });
+    /** @type {unknown} */
     let payload;
     try {
       payload = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } catch {
       return respond(400, { error: 'Invalid JSON' });
     }
-    if (!['name', 'phone', 'date'].every((key) => typeof payload?.[key] === 'string' && payload[key].length > 0)) {
+    if (!isJsonObject(payload) || !['name', 'phone', 'date'].every((key) => {
+      const value = payload[key];
+      return typeof value === 'string' && value.length > 0;
+    })) {
       return respond(400, { error: 'Expected name, phone and date as nonempty strings' });
     }
     setTimeout(() => respond(status, status < 400 ? { id: `stub-${n}` } : { error: 'stub failure' }), delay);
   });
 }
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   let url;
   try {
+    if (req.url === undefined) throw new Error('Missing request URL');
     url = new URL(req.url, 'http://127.0.0.1');
   } catch {
     res.writeHead(400).end();
@@ -136,6 +166,9 @@ http.createServer(async (req, res) => {
   } catch {
     res.writeHead(404).end();
   }
-}).listen(port, '127.0.0.1', function () {
-  console.log(`serving ${root} at http://127.0.0.1:${this.address().port}/ (POST /api/bookings -> ${status} after ${delay} ms)`);
+});
+server.listen(port, '127.0.0.1', () => {
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Expected a TCP server address');
+  console.log(`serving ${root} at http://127.0.0.1:${address.port}/ (POST /api/bookings -> ${status} after ${delay} ms)`);
 });
