@@ -33,7 +33,7 @@ function simulateRequest(status, failuresBeforeSuccess, attempts) {
   const result = withRetry(async (attempt) => {
     steps.push(`call ${attempt}`);
     if (errors.length < failuresBeforeSuccess) {
-      const error = httpError(status);
+      const error = status === null ? new TypeError('Failed to fetch') : httpError(status);
       errors.push(error);
       throw error;
     }
@@ -75,6 +75,7 @@ async function expectRejectedClientErrors() {
 
 const tests = [
   ['returns the first successful result', () => expectRecovery(503, 0)],
+  ['recovers after a connection failure without an HTTP status', () => expectRecovery(null, 1)],
   ...recoveryCases.map(([status, failuresBeforeSuccess]) => [
     `recovers after HTTP ${status}`,
     () => expectRecovery(status, failuresBeforeSuccess),

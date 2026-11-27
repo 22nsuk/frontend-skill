@@ -2,10 +2,18 @@
 
 import argparse
 import json
+import re
 from pathlib import Path
 from subprocess import check_output, run
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile, ZipInfo
+
+try:
+    import yaml
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Install the packaging prerequisite: python -m pip install -r scripts/requirements-package-mixdog.txt"
+    ) from None
 
 
 SCRIPT = Path(__file__).resolve()
@@ -13,15 +21,67 @@ ROOT = SCRIPT.parents[1]
 SOURCE = ROOT / "skills" / "frontend-skill"
 OUTPUT = ROOT / "packages" / "frontend-skill-mixdog.zip"
 TRIGGER = "Design/review pages, UIs, charts, reports. Skip backend-only"
+# Mixdog reads frontmatter with this pattern and parses it as YAML that rejects duplicate keys.
+FRONTMATTER = re.compile(r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+# A crowded Mixdog listing shortens every trigger to this many characters.
+LISTING_LIMIT = 60
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    # PyYAML keeps the last of duplicate keys; Mixdog's parser rejects the document.
+    def construct_mapping(self, node, deep=False):
+        keys = []
+        for key_node, _ in node.value:
+            key = self.construct_object(key_node, deep=True)
+            if key in keys:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"found duplicate key {key!r}", key_node.start_mark
+                )
+            keys.append(key)
+        return super().construct_mapping(node, deep)
+
+
+def load_frontmatter(document: bytes) -> tuple[yaml.MappingNode, dict]:
+    match = FRONTMATTER.match(document.decode("utf-8"))
+    if not match:
+        raise SystemExit("SKILL.md must start with YAML frontmatter closed by a --- line")
+    loader = UniqueKeyLoader(match[1])
+    try:
+        root = loader.get_single_node()
+        # The trigger is added as another line of the root block mapping.
+        if not isinstance(root, yaml.MappingNode) or root.flow_style:
+            raise SystemExit("SKILL.md frontmatter must be a YAML block mapping")
+        return root, loader.construct_document(root)
+    except yaml.YAMLError as error:
+        raise SystemExit(f"Mixdog cannot parse the SKILL.md frontmatter: {error}") from None
+    finally:
+        loader.dispose()
 
 
 def mixdog_manifest(document: bytes) -> bytes:
+    root, fields = load_frontmatter(document)
+    if "when_to_use" in fields:
+        raise SystemExit(
+            f"Remove when_to_use from {SOURCE.relative_to(ROOT).as_posix()}/SKILL.md; "
+            f"the Mixdog package sets it from TRIGGER in {SCRIPT.relative_to(ROOT).as_posix()}"
+        )
     opening, newline, rest = document.partition(b"\n")
-    if opening.rstrip(b"\r") != b"---" or not newline:
-        raise ValueError("SKILL.md must start with YAML frontmatter")
     line_ending = b"\r\n" if opening.endswith(b"\r") else b"\n"
+    indent = b" " * root.start_mark.column
     trigger = json.dumps(TRIGGER, ensure_ascii=False).encode("utf-8")
-    return opening + newline + b"when_to_use: " + trigger + line_ending + rest
+    return opening + newline + indent + b"when_to_use: " + trigger + line_ending + rest
+
+
+def check_manifest(document: bytes) -> None:
+    _, fields = load_frontmatter(document)
+    if fields.get("name") != SOURCE.name:
+        raise SystemExit(f"SKILL.md name must match the packaged folder: {SOURCE.name}")
+    description = fields.get("description")
+    if not isinstance(description, str) or not description.strip() or {"<", ">"} & set(description):
+        raise SystemExit("SKILL.md description must be a nonempty string without angle brackets")
+    trigger = fields.get("when_to_use")
+    if not isinstance(trigger, str) or not 0 < len(trigger.strip()) <= LISTING_LIMIT or {"<", ">"} & set(trigger):
+        raise SystemExit(f"TRIGGER must have 1-{LISTING_LIMIT} characters and no angle brackets")
 
 
 def check_staged_zip(tree: str, rebuilt: Path) -> None:
@@ -71,6 +131,7 @@ def build(*, check_only: bool = False) -> None:
                 data = check_output(["git", "cat-file", "blob", oid], cwd=ROOT)
                 if name == "SKILL.md":
                     data = mixdog_manifest(data)
+                    check_manifest(data)
                 archive.writestr(entry, data)
         if check_only:
             check_staged_zip(tree, rebuilt)
