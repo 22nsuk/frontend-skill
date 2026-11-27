@@ -10,6 +10,7 @@ const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const docs = path.resolve(__dirname, '../docs');
 const workshop = path.join(docs, 'eval-fixture');
@@ -26,10 +27,14 @@ function rules(css) {
   /** @type {Map<string, Record<string, string>>} */
   const found = new Map();
   for (const [, selectors, body] of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-    const declarations = Object.fromEntries(body.split(';')
-      .map((declaration) => declaration.split(':'))
-      .filter((pair) => pair.length >= 2)
-      .map(([property, ...value]) => [property.trim(), value.join(':').trim()]));
+    const declarations = {};
+    for (const [, property, value] of body.matchAll(/(?:^|;)\s*([\w-]+)\s*:\s*([^;]+)/g)) {
+      declarations[property] = value.trim();
+      if (property === 'gap') {
+        // The last of one or two gap values sets column-gap at this point in the cascade.
+        declarations['column-gap'] = value.trim().split(/\s+/).at(-1);
+      }
+    }
     for (const selector of selectors.split(',')) {
       found.set(selector.trim(), { ...found.get(selector.trim()), ...declarations });
     }
@@ -91,8 +96,10 @@ test('workshop menu keeps the uneven spacing measured at 1280px and the narrow o
     const [, horizontal] = (own.padding ?? base.padding).split(/\s+/);
     return { margin: px(own['margin-left'] ?? base['margin-left']), padding: px(horizontal) };
   });
-  const boxGaps = measured.slice(1).map(({ margin }) => margin);
-  const labelGaps = measured.slice(1).map(({ margin, padding }, i) => measured[i].padding + margin + padding);
+  const gap = css.get('.site-nav')?.['column-gap'] ?? 'normal';
+  const columnGap = gap === 'normal' || gap === '0' ? 0 : px(gap);
+  const boxGaps = measured.slice(1).map(({ margin }) => columnGap + margin);
+  const labelGaps = boxGaps.map((boxGap, i) => measured[i].padding + boxGap + measured[i + 1].padding);
   assert.deepEqual(boxGaps, [6, 20, 34]);
   assert.deepEqual(labelGaps, [14, 28, 52]);
   assert.equal(css.get('.site-nav')?.['white-space'], 'nowrap');
@@ -124,36 +131,73 @@ test('workshop chart draws the missing April count as zero and has no text alter
   const [topY, zeroY] = [grid[0], grid[grid.length - 1]];
   const perRequest = (zeroY - topY) / 80;
   const bars = elements(between(svg, '<g class="bars">', '</g>'), 'rect').map(({ attributes }) => attributes);
-  const values = elements(between(svg, '<g class="values">', '</g>'), 'text').map(({ text }) => text);
-  const months = elements(between(svg, '<g class="months">', '</g>'), 'text').map(({ text }) => text);
+  const values = elements(between(svg, '<g class="values">', '</g>'), 'text');
+  const months = elements(between(svg, '<g class="months">', '</g>'), 'text');
   const rows = parseCsv(read(workshop, 'data', 'requests.csv'));
 
-  assert.deepEqual(months, ['1월', '2월', '3월', '4월', '5월', '6월']);
+  assert.deepEqual(months.map(({ text }) => text), ['1월', '2월', '3월', '4월', '5월', '6월']);
+  assert.equal(bars.length, months.length);
+  assert.equal(values.length, months.length);
   assert.deepEqual(rows.map(({ month }) => month), ['2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06']);
   for (const [i, row] of rows.entries()) {
     const height = Number(bars[i].height);
+    const centerX = Number(bars[i].x) + Number(bars[i].width) / 2;
+    assert.equal(Number(months[i].attributes.x), centerX, `${row.month} month label centered on bar`);
+    assert.equal(Number(values[i].attributes.x), centerX, `${row.month} value centered on bar`);
     assert.equal(Number(bars[i].y) + height, zeroY, `${row.month} bar starts at zero`);
     if (row.month === '2024-04') {
       assert.deepEqual([row.requests, row.note], ['', '접수 시스템 교체로 집계 누락']);
       assert.equal(height, 0);
-      assert.equal(values[i], '0');
+      assert.equal(values[i].text, '0');
     } else {
       assert.equal(height, Number(row.requests) * perRequest, `${row.month} bar height`);
-      assert.equal(values[i], row.requests);
+      assert.equal(values[i].text, row.requests);
     }
   }
   assert.match(html, /<figcaption>2024년 1~6월 월별 수리 접수\(건\)<\/figcaption>/);
 });
 
-test('workshop booking announces success early and discards input on failure', () => {
-  const script = read(workshop, 'app.js');
-  const accepted = script.indexOf("status.textContent = '예약 신청이 접수되었습니다.'");
-  assert.ok(accepted !== -1 && accepted < script.indexOf('fetch('), 'success text is shown before the request');
-  assert.match(script, /fetch\('api\/bookings', \{\s*method: 'POST',\s*headers: \{ 'Content-Type': 'application\/json' \}/);
-  assert.match(between(script, '.catch(', '});'), /form\.reset\(\);\s*status\.textContent = '문제가 발생했습니다\.';/);
-  assert.doesNotMatch(script, /disabled/);
-  assert.match(read(workshop, 'index.html'), /<p id="booking-status" class="booking-status"><\/p>/);
-});
+for (const failure of ['HTTP 503', 'network rejection']) {
+  test(`workshop booking announces success early and discards input after ${failure}`, async (t) => {
+    const payload = { name: '테스트', phone: '01012345678', date: '2025-04-01' };
+    const fields = Object.fromEntries(Object.entries(payload).map(([name, value]) => [name, { value }]));
+    const form = Object.assign(new EventTarget(), {
+      elements: fields,
+      reset() {
+        for (const field of Object.values(fields)) field.value = '';
+      },
+    });
+    const status = { textContent: '' };
+    const nodes = { 'booking-form': form, 'booking-status': status };
+    const request = Promise.withResolvers();
+    const fetch = t.mock.fn(() => {
+      assert.equal(status.textContent, '예약 신청이 접수되었습니다.');
+      return request.promise;
+    });
+    const script = read(workshop, 'app.js');
+    assert.doesNotMatch(script, /disabled/);
+    assert.match(read(workshop, 'index.html'), /<p id="booking-status" class="booking-status"><\/p>/);
+    vm.runInNewContext(script, { document: { getElementById: (id) => nodes[id] }, fetch });
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    assert.equal(fetch.mock.callCount(), 1);
+    const [url, options] = fetch.mock.calls[0].arguments;
+    assert.equal(url, 'api/bookings');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(options.body), payload);
+    assert.deepEqual(Object.values(fields).map((field) => field.value), Object.values(payload));
+
+    if (failure === 'HTTP 503') {
+      request.resolve(new Response(null, { status: 503 }));
+    } else {
+      request.reject(new TypeError('Failed to fetch'));
+    }
+    // The submit listener returns void. Its fetch promise reactions drain before the next turn.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(status.textContent, '문제가 발생했습니다.');
+    assert.deepEqual(Object.values(fields).map((field) => field.value), ['', '', '']);
+  });
+}
 
 test('workshop retry check fails only on the first non-retryable 4xx', () => {
   const result = spawnSync(process.execPath, [path.join(workshop, 'server', 'check-retry.js')], {
@@ -178,12 +222,19 @@ test('library report hides its conditions and source when printed', () => {
   assert.match(notes, /<a href="visits\.csv">/);
   assert.match(html.replace(notes, ''), /한 사람이 여러 번 방문하면 방문할 때마다 한 건으로 셉니다\./);
 
-  const tableRows = [...html.matchAll(/<tr><th scope="row">([^<]+)<\/th>((?:<td>[^<]+<\/td>)+)<\/tr>/g)]
-    .map(([, branch, cells]) => [branch, [...cells.matchAll(/<td>([^<]+)<\/td>/g)].map(([, value]) => value.replace(/,/g, ''))]);
+  const [branchHeader, ...months] = elements(between(html, '<thead>', '</thead>'), 'th').map(({ text }) => text);
+  assert.equal(branchHeader, '분관');
+  assert.deepEqual([...months].sort(), ['4월', '5월', '6월']);
+  const tableRows = [...html.matchAll(/<tr><th scope="row">([^<]+)<\/th>((?:<td>[^<]+<\/td>)+)<\/tr>/g)];
+  assert.deepEqual(tableRows.map(([, branch]) => branch), ['마루', '솔빛']);
+  const visits = tableRows.flatMap(([, branch, cells]) => {
+    const counts = elements(cells, 'td');
+    assert.equal(counts.length, months.length, branch);
+    return counts.map(({ text }, i) => [branch, months[i], text.replace(/,/g, '')]);
+  });
   const csv = parseCsv(read(report, 'visits.csv'));
-  assert.deepEqual(tableRows, ['마루', '솔빛'].map((branch) => [
-    branch, csv.filter((row) => row['분관'] === branch).map((row) => row['방문 건수']),
-  ]));
+  const sourceVisits = csv.map((row) => [row['분관'], `${row['월']}월`, row['방문 건수']]);
+  assert.deepEqual(visits.sort(), sourceVisits.sort(), 'visit counts by branch and month');
   assert.deepEqual(csv.filter((row) => row['비고']).map((row) => [row['분관'], row['월'], row['비고']]), [
     ['솔빛', '5', '서가 교체로 10일간 휴관'],
   ]);
