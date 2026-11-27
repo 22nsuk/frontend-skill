@@ -18,7 +18,7 @@ Choose a representation for the reader's question: tables for exact lookup, alig
 
 Provide meaningful axis labels, units, and series identification. Explain truncated or unusual scales. Prefer direct labels when they remain readable; otherwise provide a clear legend. Supplement color with text, position, shape, or line style so identification survives color loss. Keep labels and data associations intact on narrow screens.
 
-When a chart changes, ask its reader's question without looking at the graphic. For a trend, expose a text summary with the series, period, direction, and any exception that changes the conclusion. For exact lookup, provide accessible values with their row and column labels and units (for example, a semantic data table). Reuse an equivalent already on the page. Check that the answer is reachable in reading order without hover or sight and agrees with the source; a chart title alone is not an alternative.
+When a chart changes, ask its reader's question without looking at the graphic. For a trend, expose a text summary with the series, period, direction, and any exception that changes the conclusion. For exact lookup, provide accessible values with their row and column labels and units (for example, a semantic data table). Reuse an equivalent already on the page and preserve its semantic structure. Make clear which chart it describes and how to reach it through names, grouping, reading order, or supported relationships. Check that the complete answer is reachable without hover or sight and agrees with the source; a chart title or trend summary alone does not provide exact values.
 
 ## Support continuous reading
 
