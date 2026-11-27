@@ -23,8 +23,14 @@ OUTPUT = ROOT / "packages" / "frontend-skill-mixdog.zip"
 TRIGGER = "Design/review pages, UIs, charts, reports. Skip backend-only"
 # Mixdog reads frontmatter with this pattern and parses it as YAML that rejects duplicate keys.
 FRONTMATTER = re.compile(r"\A\ufeff?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
-# A crowded Mixdog listing shortens every trigger to this many characters.
+DESCRIPTION_LIMIT = 1024
+# A crowded Mixdog listing has this limit in UTF-16 code units.
 LISTING_LIMIT = 60
+# Mixdog trims with the JavaScript whitespace set before validating text.
+MIXDOG_WHITESPACE = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -72,16 +78,31 @@ def mixdog_manifest(document: bytes) -> bytes:
     return opening + newline + indent + b"when_to_use: " + trigger + line_ending + rest
 
 
+def mixdog_text_length(value: str) -> int:
+    return len(value.strip(MIXDOG_WHITESPACE).encode("utf-16-le", errors="surrogatepass")) // 2
+
+
 def check_manifest(document: bytes) -> None:
     _, fields = load_frontmatter(document)
     if fields.get("name") != SOURCE.name:
         raise SystemExit(f"SKILL.md name must match the packaged folder: {SOURCE.name}")
     description = fields.get("description")
-    if not isinstance(description, str) or not description.strip() or {"<", ">"} & set(description):
-        raise SystemExit("SKILL.md description must be a nonempty string without angle brackets")
+    if (
+        not isinstance(description, str)
+        or not 0 < mixdog_text_length(description) <= DESCRIPTION_LIMIT
+        or {"<", ">"} & set(description)
+    ):
+        raise SystemExit(
+            f"SKILL.md description must be a nonempty string of at most {DESCRIPTION_LIMIT} "
+            "UTF-16 code units without angle brackets"
+        )
     trigger = fields.get("when_to_use")
-    if not isinstance(trigger, str) or not 0 < len(trigger.strip()) <= LISTING_LIMIT or {"<", ">"} & set(trigger):
-        raise SystemExit(f"TRIGGER must have 1-{LISTING_LIMIT} characters and no angle brackets")
+    if (
+        not isinstance(trigger, str)
+        or not 0 < mixdog_text_length(trigger) <= LISTING_LIMIT
+        or {"<", ">"} & set(trigger)
+    ):
+        raise SystemExit(f"TRIGGER must have 1-{LISTING_LIMIT} UTF-16 code units and no angle brackets")
 
 
 def check_staged_zip(tree: str, rebuilt: Path) -> None:

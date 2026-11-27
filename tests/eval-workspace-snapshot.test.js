@@ -99,6 +99,42 @@ test('reports no differences only for an unchanged workspace in two separate rec
   }
 });
 
+test('validates paths, hashes and byte counts before comparing either snapshot', (t) => {
+  const { evidence, write, record } = setup(t);
+  write('empty.txt', '');
+  assert.equal(record('before.json').status, 0);
+  assert.equal(record('after.json').status, 0);
+  const before = path.join(evidence, 'before.json');
+  const after = path.join(evidence, 'after.json');
+  const original = JSON.parse(fs.readFileSync(after, 'utf8'));
+  const empty = original.entries.find((entry) => entry.path === 'empty.txt');
+  assert.equal(empty.size, 0);
+  const edited = path.join(evidence, 'edited.json');
+  const others = original.entries.filter((entry) => entry !== empty);
+  const save = (...entries) => fs.writeFileSync(edited, JSON.stringify({ ...original, entries: [...others, ...entries] }));
+
+  save({ ...empty, sha256: empty.sha256.toUpperCase() });
+  const equivalent = snapshot('compare', before, edited);
+  assert.equal(equivalent.status, 0, equivalent.stderr);
+
+  const invalidCases = [
+    [[{ ...empty, size: 1 }, empty], /Duplicate entry path/],
+    [[{ ...empty, sha256: 'a'.repeat(63) }], /Invalid SHA-256/],
+    [[{ ...empty, sha256: 'z'.repeat(64) }], /Invalid SHA-256/],
+    [[{ ...empty, size: -1 }], /Invalid file size/],
+    [[{ ...empty, size: 0.5 }], /Invalid file size/],
+  ];
+  for (const [entries, diagnostic] of invalidCases) {
+    save(...entries);
+    for (const pair of [[before, edited], [edited, after]]) {
+      const result = snapshot('compare', ...pair);
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, diagnostic);
+      assert.equal(result.stdout, '');
+    }
+  }
+});
+
 test('records links without following them outside the workspace', (t) => {
   const { temp, workspace, evidence, record } = setup(t);
   const outside = path.join(temp, 'outside');

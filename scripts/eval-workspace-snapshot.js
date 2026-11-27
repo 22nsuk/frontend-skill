@@ -116,14 +116,37 @@ function load(file) {
   } catch (error) {
     fail(`Cannot read snapshot ${file}: ${error.message}`);
   }
-  const valid = snapshot?.format === FORMAT && typeof snapshot.root === 'string' &&
-    typeof snapshot.recordedAt === 'string' && Array.isArray(snapshot.entries) &&
-    snapshot.entries.every((entry) => typeof entry?.path === 'string' && (
-      entry.type === 'file' ? typeof entry.sha256 === 'string' && Number.isInteger(entry.size)
-        : entry.type === 'symlink' ? typeof entry.target === 'string'
-          : entry.type === 'dir' || entry.type === 'other'));
-  if (!valid) fail(`Not a workspace snapshot from this tool: ${file}`);
-  return snapshot;
+  if (snapshot?.format !== FORMAT || typeof snapshot.root !== 'string' ||
+      typeof snapshot.recordedAt !== 'string' || !Array.isArray(snapshot.entries)) {
+    fail(`Not a workspace snapshot from this tool: ${file}`);
+  }
+
+  const entries = new Map();
+  for (const entry of snapshot.entries) {
+    if (typeof entry?.path !== 'string' || !entry.path) fail(`Missing entry path in ${file}`);
+    if (entries.has(entry.path)) fail(`Duplicate entry path ${JSON.stringify(entry.path)} in ${file}`);
+    switch (entry.type) {
+      case 'file':
+        if (typeof entry.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(entry.sha256)) {
+          fail(`Invalid SHA-256 for ${JSON.stringify(entry.path)} in ${file}`);
+        }
+        if (!Number.isSafeInteger(entry.size) || entry.size < 0) {
+          fail(`Invalid file size for ${JSON.stringify(entry.path)} in ${file}`);
+        }
+        entry.sha256 = entry.sha256.toLowerCase();
+        break;
+      case 'symlink':
+        if (typeof entry.target !== 'string') fail(`Missing link target for ${JSON.stringify(entry.path)} in ${file}`);
+        break;
+      case 'dir':
+      case 'other':
+        break;
+      default:
+        fail(`Unknown entry type for ${JSON.stringify(entry.path)} in ${file}`);
+    }
+    entries.set(entry.path, entry);
+  }
+  return { root: snapshot.root, recordedAt: snapshot.recordedAt, entries };
 }
 
 function compare(beforeFile, afterFile) {
@@ -136,8 +159,8 @@ function compare(beforeFile, afterFile) {
     fail('The after snapshot must be a separate record made later than the before snapshot.');
   }
 
-  const old = new Map(before.entries.map((entry) => [entry.path, entry]));
-  const now = new Map(after.entries.map((entry) => [entry.path, entry]));
+  const old = before.entries;
+  const now = after.entries;
   const counts = { added: 0, removed: 0, changed: 0 };
   const report = (kind, entry, detail = '') => {
     counts[kind]++;

@@ -14,8 +14,13 @@ ARCHIVE_PATH = "packages/frontend-skill-mixdog.zip"
 
 
 def with_trigger(script, trigger):
-    line = b"TRIGGER = " + json.dumps(trigger).encode()
+    line = b"TRIGGER = " + json.dumps(trigger, ensure_ascii=False).encode("utf-8")
     return re.sub(rb"^TRIGGER = .*$", lambda _: line, script, count=1, flags=re.M)
+
+
+def skill_with_description(description):
+    value = json.dumps(description, ensure_ascii=False)
+    return f"---\nname: frontend-skill\ndescription: {value}\n---\n\nBody.\n".encode("utf-8")
 
 
 class ShippedMixdogPackageTest(unittest.TestCase):
@@ -58,7 +63,7 @@ class MixdogPackageTest(unittest.TestCase):
         [value] = [line.split(":", 1)[1] for line in frontmatter if line.startswith("when_to_use:")]
         trigger = json.loads(value)
         self.assertTrue(trigger.strip())
-        self.assertLessEqual(len(trigger), 60, "Mixdog can shorten each listing to 60 characters")
+        self.assertLessEqual(len(trigger.encode("utf-16-le")) // 2, 60)
 
     def assert_not_shipped(self, message):
         original = self.archive.read_bytes()
@@ -120,11 +125,35 @@ class MixdogPackageTest(unittest.TestCase):
         self.build()
         subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
         script = self.script.read_bytes()
-        for trigger in [" ", "x" * 61, "Design <pages>"]:
+        for trigger in [" ", "x" * 61, "x" * 59 + "\U0001f3a8", "Design <pages>"]:
             with self.subTest(trigger=trigger):
                 self.script.write_bytes(with_trigger(script, trigger))
                 subprocess.run(["git", "add", "--", "scripts/package-mixdog.py"], cwd=self.root, check=True)
                 self.assert_not_shipped("TRIGGER must")
+
+    def test_description_over_the_mixdog_limit_is_not_shipped(self):
+        self.build()
+        subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+        for description in ["x" * 1025, "x" * 1023 + "\U0001f3a8"]:
+            with self.subTest(description=description):
+                (self.skill / "SKILL.md").write_bytes(skill_with_description(description))
+                subprocess.run(["git", "add", "--", "skills/frontend-skill/SKILL.md"], cwd=self.root, check=True)
+                self.assert_not_shipped("at most 1024 UTF-16 code units")
+
+    def test_exact_text_limits_are_accepted_after_trimming(self):
+        script = self.script.read_bytes()
+        cases = [
+            (" " + "x" * 1024 + " ", " " + "x" * 60 + " "),
+            ("\ufeff" + "x" * 1022 + "\U0001f3a8", "\ufeff" + "x" * 58 + "\U0001f3a8"),
+        ]
+        for description, trigger in cases:
+            with self.subTest(description=description, trigger=trigger):
+                (self.skill / "SKILL.md").write_bytes(skill_with_description(description))
+                self.script.write_bytes(with_trigger(script, trigger))
+                subprocess.run(["git", "add", "--", "skills", "scripts"], cwd=self.root, check=True)
+                self.build()
+                subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)
+                self.build("--check")
 
     def test_check_uses_staged_zip_even_when_worktree_has_a_different_copy(self):
         self.build()
