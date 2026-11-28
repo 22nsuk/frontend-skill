@@ -185,9 +185,10 @@ test('workshop logo, typeface and heading keep their original treatment', async 
   assert.equal(source.match(/font-family\s*:/g)?.length, 1, 'only body declares a font family');
   assert.match(rules(source).get('body')?.['font-family'] ?? '', /^"Pretendard"/);
   const fontFamilies = await page.locator('body').evaluate((body) =>
-    getComputedStyle(body).fontFamily.split(',').map((name) => name.trim().replace(/^(['"])(.*)\1$/, '$2')));
-  assert.deepEqual(fontFamilies, [
-    'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic', 'sans-serif',
+    getComputedStyle(body).fontFamily.split(',').map((name) => name.trim()));
+  assert.equal(fontFamilies.pop(), 'sans-serif', 'generic body font fallback');
+  assert.deepEqual(fontFamilies.map((name) => name.replace(/^(['"])(.*)\1$/, '$2')), [
+    'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic',
   ], 'computed body font families');
   assert.doesNotMatch(source, /keep-all/);
   assert.match(read(workshop, 'index.html'), /<h1>고장 난 생활용품, 동네에서 고쳐 드립니다<\/h1>/);
