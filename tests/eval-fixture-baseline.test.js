@@ -143,9 +143,20 @@ test('workshop menu keeps the measured box and label gaps at 1280px', async (t) 
       return range.getBoundingClientRect();
     });
     const gaps = (rects) => rects.slice(1).map((rect, i) => Math.round(rect.left - rects[i].right));
+    // Sample between link centers so pseudo-elements extending the hit targets count too.
+    const hitGaps = boxes.slice(1).map((right, i) => {
+      const left = boxes[i];
+      const y = (Math.max(left.top, right.top) + Math.min(left.bottom, right.bottom)) / 2;
+      let gap = 0;
+      for (let x = left.right - Math.floor(left.width / 2); x < right.left + right.width / 2; x++) {
+        if (!document.elementFromPoint(x, y)?.closest('a[href]')) gap++;
+      }
+      return gap;
+    });
     return {
       links: links.map((link) => [link.getAttribute('href'), link.textContent]),
       boxGaps: gaps(boxes),
+      hitGaps,
       labelGaps: gaps(labels),
     };
   });
@@ -154,6 +165,7 @@ test('workshop menu keeps the measured box and label gaps at 1280px', async (t) 
   ]);
 
   assert.deepEqual(menu.boxGaps, [6, 20, 34]);
+  assert.deepEqual(menu.hitGaps, menu.boxGaps, 'hit-tested gaps between menu links');
   assert.deepEqual(menu.labelGaps, [14, 28, 52]);
   assert.equal(await nav.evaluate((node) => getComputedStyle(node).whiteSpace), 'nowrap');
 });
@@ -239,6 +251,11 @@ test('workshop chart draws the missing April count as zero and has no text alter
       assert.ok(width > 0, `${row.month} bar has width`);
       closeInPixels(height, Number(row.requests) * perRequest, `${row.month} bar height`);
       assert.equal(values[i].text, row.requests);
+      // Compare the same crop with the bars painted and hidden. This also accepts an outline-only bar.
+      const bar = chart.locator('.bars rect').nth(i);
+      const painted = await bar.screenshot({ animations: 'disabled' });
+      const hidden = await bar.screenshot({ animations: 'disabled', style: '#stats .bars rect { opacity: 0 !important; }' });
+      assert.ok(!painted.equals(hidden), `${row.month} bar contributes visible pixels`);
     }
   }
   assert.match(html, /<figcaption>2024년 1~6월 월별 수리 접수\(건\)<\/figcaption>/);
@@ -349,7 +366,15 @@ test('workshop retry check fails only on the first non-retryable 4xx', () => {
   });
   assert.equal(result.status, 1, result.stdout + result.stderr);
   const lines = result.stdout.trim().split(/\r?\n/);
-  assert.equal(lines.filter((line) => line.startsWith('ok - ')).length, 12);
+  const passed = lines.filter((line) => line.startsWith('ok - ')).map((line) => line.slice('ok - '.length));
+  const expected = [
+    'returns the first successful result',
+    'recovers after a connection failure without an HTTP status',
+    ...[408, 429, 500, 502, 503, 504].map((status) => `recovers after HTTP ${status}`),
+    'uses three attempts by default for persistent HTTP 503',
+    ...[1, 3, 4].map((attempts) => `honors attempts: ${attempts} for persistent HTTP 503`),
+  ];
+  assert.deepEqual(passed.sort(), expected.sort(), 'successful retry scenarios');
   assert.deepEqual(lines.filter((line) => !line.startsWith('ok - ')), [
     'not ok - rejects every non-retryable 4xx without waiting',
     '  Missing expected rejection: HTTP 400 must reject immediately',
@@ -382,6 +407,14 @@ test('library report hides its conditions and source when printed', async (t) =>
     for (const selector of ['.filter', '.notes']) {
       assert.equal(await page.locator(selector).evaluate((node) => getComputedStyle(node).display), 'none', selector);
     }
+    const noteText = /10일간\s*휴관|분관별 월간 집계표/;
+    assert.doesNotMatch((await visibleTexts(page.getByText(noteText))).join(' '), noteText, 'printed closure or source text');
+    const printedSource = await page.locator('a[href]').evaluateAll((links) => {
+      const source = new URL('visits.csv', document.baseURI);
+      return links.some((link) => link.origin === source.origin && link.pathname === source.pathname
+        && link.checkVisibility({ opacityProperty: true, visibilityProperty: true }));
+    });
+    assert.equal(printedSource, false, 'printed link to visits.csv');
     assert.ok(await countingRule.isVisible(), 'repeat-visit counting rule visible in print');
     assert.ok(await page.getByText(`${reportYear}년 2분기`).isVisible(), 'report period visible in print');
     assert.deepEqual(await visibleTexts(rowHeaders), [branch], 'only the selected branch prints');
