@@ -174,7 +174,12 @@ test('workshop logo, typeface and heading keep their original treatment', async 
   assert.match(rules(source).get('body')?.['font-family'] ?? '', /^"Pretendard"/);
   assert.doesNotMatch(source, /keep-all/);
   assert.match(read(workshop, 'index.html'), /<h1>고장 난 생활용품, 동네에서 고쳐 드립니다<\/h1>/);
-  assert.equal(rules(source).get('.booking-form input')?.border, '1px solid #c9c3d9');
+  const borders = await page.locator('#booking-form input:not([type="hidden"])').evaluateAll((inputs) =>
+    inputs.map((input) => [input.name, getComputedStyle(input).border]));
+  assert.ok(borders.length > 0, 'booking form has inputs');
+  for (const [name, border] of borders) {
+    assert.equal(border, '1px solid rgb(201, 195, 217)', `${name} input border`);
+  }
 });
 
 test('workshop chart draws the missing April count as zero and has no text alternative', async (t) => {
@@ -241,6 +246,28 @@ test('workshop chart draws the missing April count as zero and has no text alter
 
 const booking = { name: '테스트', phone: '01012345678', date: '2025-04-01' };
 
+async function bookingStatusLiveSetting(cdp) {
+  const { root } = await cdp.send('DOM.getDocument');
+  const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: '#booking-status' });
+  const { nodes } = await cdp.send('Accessibility.getAXNodeAndAncestors', { nodeId });
+  assert.ok(nodes.length > 0, 'booking status has an accessibility node');
+
+  // Chromium exposes implicit live roles on the AX node, but omits the live
+  // property for aria-live="off". An explicit off stops inheritance here.
+  const { nodeIds } = await cdp.send('DOM.querySelectorAll', { nodeId: root.nodeId, selector: '[aria-live="off" i]' });
+  const offNodes = new Set();
+  for (const id of nodeIds) {
+    const { node } = await cdp.send('DOM.describeNode', { nodeId: id });
+    offNodes.add(node.backendNodeId);
+  }
+  for (const node of nodes) {
+    if (offNodes.has(node.backendDOMNodeId)) return 'off';
+    const live = node.properties?.find((property) => property.name === 'live');
+    if (live) return live.value.value;
+  }
+  return 'off';
+}
+
 async function prepareBooking(page) {
   for (const [field, value] of Object.entries(booking)) {
     await page.locator(`#booking-form [name="${field}"]`).fill(value);
@@ -270,6 +297,8 @@ for (const failure of ['HTTP 503', 'network rejection']) {
   test(`workshop booking announces success early and discards input after ${failure}`, async (t) => {
     const page = await openFixture(t, workshop);
     const calls = await prepareBooking(page);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Accessibility.enable');
     const status = page.locator('#booking-status');
     const form = page.locator('#booking-form');
     const fields = () => form.evaluate((node) => Object.fromEntries(new FormData(node)));
@@ -289,6 +318,7 @@ for (const failure of ['HTTP 503', 'network rejection']) {
       url: 'api/bookings', method: 'POST', contentType: 'application/json', body: booking,
     }]);
     assert.deepEqual(await visibleTexts(status), [accepted], 'booking status visible while pending');
+    assert.equal(await bookingStatusLiveSetting(cdp), 'off', 'pending status is outside active live regions');
     assert.deepEqual(await fields(), booking);
 
     await calls.evaluate(([{ response }], failure) => {
@@ -299,6 +329,7 @@ for (const failure of ['HTTP 503', 'network rejection']) {
       }
     }, failure);
     assert.deepEqual(await visibleTexts(status), ['문제가 발생했습니다.'], 'booking status visible after failure');
+    assert.equal(await bookingStatusLiveSetting(cdp), 'off', 'failure status is outside active live regions');
     assert.deepEqual(await fields(), { name: '', phone: '', date: '' });
   });
 }
@@ -366,8 +397,12 @@ test('library report hides its conditions and source when printed', async (t) =>
   await filter.selectOption({ label: '전체 분관' });
   assert.deepEqual(await visibleTexts(rowHeaders), branches);
   const csv = parseCsv(read(report, 'visits.csv'));
-  const sourceVisits = csv.map((row) => [row['분관'], row['연도'], `${row['월']}월`, row['방문 건수']]);
-  assert.deepEqual(visits.sort(), sourceVisits.sort(), 'visit counts by branch, year and month');
+  const sourceVisits = csv.map((row) => [row['분관'], row['연도'], `${row['월']}월`, row['방문 건수']]).sort();
+  assert.deepEqual(visits.sort(), sourceVisits, 'visit counts by branch, year and month');
+  assert.deepEqual(sourceVisits, [
+    ['마루', reportYear, '4월', '1200'], ['마루', reportYear, '5월', '1080'], ['마루', reportYear, '6월', '1320'],
+    ['솔빛', reportYear, '4월', '900'], ['솔빛', reportYear, '5월', '600'], ['솔빛', reportYear, '6월', '960'],
+  ], 'documented quarterly visit counts');
   assert.deepEqual(csv.filter((row) => row['비고']).map((row) => [row['분관'], row['월'], row['비고']]), [
     ['솔빛', '5', '서가 교체로 10일간 휴관'],
   ]);
