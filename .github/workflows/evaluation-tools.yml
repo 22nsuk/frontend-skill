@@ -26,6 +26,7 @@ jobs:
           cargo clippy --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml
       - name: Check benchmark driver on the workshop fixture
+        timeout-minutes: 5
         working-directory: tools/eval-workspace-snapshot
         run: cargo run --locked --example benchmark -- --smoke target/debug/eval-workspace-snapshot${{ runner.os == 'Windows' && '.exe' || '' }}
 
