@@ -204,7 +204,8 @@ class MixdogPackageTest(unittest.TestCase):
         script = self.script.read_text(encoding="utf-8")
         script = re.sub(r'^UPSTREAM = ".*"$', f'UPSTREAM = "{upstream.as_uri()}"', script, flags=re.M)
         script = re.sub(r'^UPSTREAM_REVISION = ".*"$', f'UPSTREAM_REVISION = "{revision}"', script, flags=re.M)
-        self.script.write_text(script, encoding="utf-8")
+        # Keep LF on Windows too, as the checkout does; Git would warn about CRLF.
+        self.script.write_text(script, encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "--", "scripts"], cwd=self.root, check=True)
         self.build()
         subprocess.run(["git", "add", "--", ARCHIVE_PATH], cwd=self.root, check=True)

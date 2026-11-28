@@ -60,7 +60,22 @@ const types = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.csv': 'text/csv; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.pdf': 'application/pdf',
 };
 let bookings = 0;
 
@@ -132,6 +147,9 @@ function handleBooking(req, res) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // Each run serves a different workspace, often at the same address. Never let the
+  // browser reuse a response from an earlier workspace.
+  res.setHeader('Cache-Control', 'no-store');
   let url;
   try {
     if (req.url === undefined) throw new Error('Missing request URL');
@@ -170,11 +188,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const data = await fs.promises.readFile(target);
-    res.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { 'Content-Type': types[path.extname(file).toLowerCase()] || 'application/octet-stream' });
     res.end(req.method === 'HEAD' ? undefined : data);
   } catch {
     res.writeHead(404).end();
   }
+});
+server.on('error', (/** @type {NodeJS.ErrnoException} */ error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Port ${port} on 127.0.0.1 is already in use. Stop the other server or choose another port with --port N (0 picks a free port).`);
+  } else {
+    console.error(`Cannot start the stub server: ${error.message}`);
+  }
+  process.exit(1);
 });
 server.listen(port, '127.0.0.1', () => {
   const address = server.address();

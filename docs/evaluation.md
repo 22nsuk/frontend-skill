@@ -53,7 +53,9 @@
 | 서버 | `withRetry`가 400·401·404 같은 요청 오류도 재시도. `node server/check-retry.js`에서 4xx 즉시 중단 검사가 첫 대상인 400에서 실패하고 종료 코드 1. 즉시 성공, 상태 코드 없는 일시적 연결 오류와 여섯 HTTP 오류의 복구, 연속 503의 대기·시도 제한 검사는 통과 | 3 |
 | 보고서 | 분관을 선택하면 표에 해당 분관만 남고 전체로 돌아가면 두 행이 복구됨. 360px에서는 고정 너비 본문이 화면을 넘침. 인쇄하면 선택한 행은 남지만 휴관 조건과 출처가 함께 사라짐 | 7 |
 
-이 문서와 기준 상태는 실행자에게 주지 않습니다. 자료 파일에는 문제를 알려 주는 주석이나 평가 용어를 두지 않았습니다. 자료를 고칠 때도 같은 원칙을 지키고, 고친 뒤 이 표를 다시 측정합니다.
+이 문서와 기준 상태는 실행자에게 주지 않습니다. 자료 파일에는 문제를 알려 주는 주석이나 평가 용어를 두지 않았습니다. 자료를 고칠 때도 같은 원칙을 지키고, 고친 뒤 이 표를 다시 측정합니다. 의도한 변경이라면 이 표와 테스트의 기대값을 함께 고칩니다.
+
+저장소 루트에서 `npm ci`와 `npx --no-install playwright-core install --with-deps --only-shell chromium`을 실행한 뒤 `node --test tests/eval-fixture-baseline.test.js`로 기준 상태를 검사합니다. 테스트는 외부 네트워크를 끈 Chromium에서 1280px 메뉴의 클릭 영역·문구 간격, 응답 전 예약 버튼 더블클릭의 요청 건수, 인쇄 시 필터와 주석의 표시 여부를 확인합니다. 로고·서체, 차트와 원자료, 예약 실패 문구와 입력값, 재시도 검사 결과, 평가 용어의 부재도 확인합니다. 좁은 화면의 가로 넘침과 줄바꿈은 브라우저로 따로 측정합니다.
 
 ## 실행 준비와 초기화
 
@@ -156,7 +158,7 @@
 
 `git -C "$run" diff --cached -G "https?://" "$base"`는 검토할 URL을 찾는 보조 수단입니다. 변경 줄에서 새 외부 링크·리소스·요청 대상인지 확인합니다. SVG의 `xmlns="http://www.w3.org/2000/svg"`는 식별자이므로 허용합니다. 검색에 잡히지 않는 `//` 형식의 주소나 코드가 조합한 URL도 있어 전체 diff와 아래 브라우저 요청 기록을 함께 봅니다.
 
-화면은 스텁 서버로 띄워 측정합니다. 저장소 루트에서 `node docs/eval-stub-server.js "$run"`을 실행합니다. 수정된 페이지를 열기 **전**에 평가용 브라우저의 네트워크를 해당 스텁 주소로만 제한하세요(예: 외부 네트워크를 끊은 격리 환경에서 스텁과 브라우저만 함께 실행). 외부 요청 시도는 차단됐어도 실패로 기록합니다. 격리할 수 없으면 실행하지 말고 화면·네트워크 검사를 미관찰로 둡니다. 기본 주소는 `http://127.0.0.1:47613/`입니다. 포트가 사용 중이면 `--port`로 바꿉니다.
+화면은 스텁 서버로 띄워 측정합니다. 저장소 루트에서 `node docs/eval-stub-server.js "$run"`을 실행합니다. 수정된 페이지를 열기 **전**에 평가용 브라우저의 네트워크를 해당 스텁 주소로만 제한하세요(예: 외부 네트워크를 끊은 격리 환경에서 스텁과 브라우저만 함께 실행). 외부 요청 시도는 차단됐어도 실패로 기록합니다. 격리할 수 없으면 실행하지 말고 화면·네트워크 검사를 미관찰로 둡니다. 기본 주소는 `http://127.0.0.1:47613/`입니다. 포트가 사용 중이면 `--port`로 바꿉니다. 스텁은 모든 응답에 `Cache-Control: no-store`를 보냅니다. 그래도 localStorage 같은 브라우저 저장소와 서비스 워커는 같은 주소·포트(출처)에 남아 다음 작업 폴더의 화면에 영향을 줄 수 있습니다. 작업 폴더마다 다른 `--port`를 쓰거나 새 브라우저 프로필을 사용합니다.
 
 정적 결과를 측정하는 동안에는 서버가 제공하는 작업 폴더와 그 안의 파일·링크를 수정하거나 교체하지 않습니다. 기록 파일은 작업 폴더 밖에 저장합니다. 측정이 끝나면 서버를 종료합니다. 화면 폭은 개발자 도구의 기기 모드로 정합니다.
 
@@ -401,7 +403,7 @@ cargo build --release --locked --manifest-path tools/eval-workspace-snapshot/Car
 cargo test --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml
 ```
 
-`cargo test`는 Rust 단위 검사와 CLI 통합 검사를 실행합니다. 테스트 자료를 만들 때 Git과 Windows의 `pwsh`와 `cmd.exe` 내장 `mklink`(정션) 또는 Unix의 `mkfifo`(이름 있는 파이프)를 사용합니다. 이전 Node CLI로 생성한 고정 기록, 무시된 파일과 링크, 변경 없는 실행, 중복 경로, 잘못된 해시와 바이트 수를 검사합니다. 손상된 UTF-8이 어느 쪽 기록에 있든 오류로 처리하는지, 큰 변경 목록을 마지막 요약까지 출력하는지도 검사합니다.
+`cargo test`는 Rust 단위 검사와 CLI 통합 검사를 실행합니다. 테스트 자료를 만들 때 Git과 Windows의 `pwsh`와 `cmd.exe` 내장 `mklink`(정션) 또는 Unix의 `mkfifo`(이름 있는 파이프)를 사용합니다. 이전 Node CLI로 생성한 고정 기록, 무시된 파일과 링크, 변경 없는 실행, 중복 경로, 잘못된 해시와 바이트 수를 검사합니다. 손상된 UTF-8이 어느 쪽 기록에 있든 오류로 처리하는지, 큰 변경 목록을 마지막 요약까지 출력하는지, 읽지 못한 항목의 상대 경로를 오류에 밝히는지도 검사합니다. CI는 Ubuntu에서 `cargo fmt --check`와 경고를 오류로 다루는 `cargo clippy`도 실행합니다.
 
 성능 측정은 저장소 루트에서 위의 릴리스 빌드를 마친 뒤 Rust 벤치마크 드라이버로 실행합니다. 마지막 인자에는 비교하려는 다른 리비전의 실행 파일 경로도 지정할 수 있습니다. Windows에서는 실행 파일 경로 끝에 `.exe`를 붙입니다.
 
@@ -413,7 +415,7 @@ cargo run --release --locked --manifest-path tools/eval-workspace-snapshot/Cargo
 
 각 측정은 새 CLI 프로세스의 시작부터 출력 수집까지 걸린 시간이며 예열 3회 뒤 15회의 중앙값을 표시합니다. 자료 준비와 출력 검증은 측정 구간 밖에서 수행합니다. 짧은 기능 검사에는 실행 파일 경로 앞에 `--smoke`를 붙입니다. CI에서는 Ubuntu와 Windows에서 공방 자료의 기록과 세 가지 비교를 한 번씩 검사합니다.
 
-평가용 스텁은 작업 경로 뒤에서 `--status 503`과 `--status=503` 두 표기를 모두 받습니다. `--status`는 최종 HTTP 상태 코드(200~599), `--delay`는 밀리초(0~2147483647), `--port`는 포트 번호(0~65535, 0은 자동 할당)입니다. 모르는 옵션, 중복 옵션, 빠지거나 잘못된 값은 오류로 종료하며 서버를 시작하지 않습니다. 스텁을 수정하면 `node --test tests/eval-stub-server.test.js`로 작업 경로, 옵션 처리, 예약 요청 형식을 확인합니다.
+평가용 스텁은 작업 경로 뒤에서 `--status 503`과 `--status=503` 두 표기를 모두 받습니다. `--status`는 최종 HTTP 상태 코드(200~599), `--delay`는 밀리초(0~2147483647), `--port`는 포트 번호(0~65535, 0은 자동 할당)입니다. 모르는 옵션, 중복 옵션, 빠지거나 잘못된 값은 오류로 종료하며 서버를 시작하지 않습니다. 스텁을 수정하면 `node --test tests/eval-stub-server.test.js`로 작업 경로, 옵션 처리, 예약 요청 형식, 캐시 방지 헤더, 포트 충돌 안내를 확인합니다. 포트가 이미 사용 중이면 스텁은 다른 `--port`를 쓰라는 안내와 함께 종료 코드 1로 끝납니다.
 
 예약 스텁과 Mixdog 매니페스트 생성기의 타입 검사는 저장소 루트에서 `npm ci` 후 `npm run typecheck`로 실행합니다. TypeScript가 JavaScript 소스를 `strict`와 `checkJs`로 검사합니다. 스텁은 기존과 같이 Node에서 직접 실행하며 스킬 설치 ZIP에는 이 개발 도구가 들어가지 않습니다.
 
@@ -434,7 +436,7 @@ python scripts/package-mixdog.py --check-release
 
 의존성을 설치한 뒤 오프라인에서 확인하려면 `python scripts/package-mixdog.py --check`를 사용합니다. 빌드와 같은 메타데이터 검사를 거친 뒤, 한 번 고정한 Git 인덱스의 원본으로 재생성한 ZIP과 같은 시점의 스테이징된 ZIP을 바이트 단위로 비교합니다. 스테이징된 ZIP이 누락되거나 오래됐으면 실패합니다.
 
-`--check-release`는 같은 바이트 비교를 통과한 스테이징 ZIP을 임시 폴더에 풀고, GitHub에서 고정한 Mixdog 리비전(`8382c929c3d7ae5c6692136c67c63be821838bc0`)의 공식 검증기를 가져와 그 안의 `frontend-skill/`에 실행합니다. 검증기가 오류를 반환하면 배포 검사가 실패합니다. GitHub Actions는 푸시와 풀 리퀘스트마다 Ubuntu·Windows에서 오프라인 패키징 테스트를 실행하고, Ubuntu에서 공식 검증기를 한 번 실행합니다. [Mixdog 공식 검증기](https://github.com/tribgames/mixdog/blob/8382c929c3d7ae5c6692136c67c63be821838bc0/src/defaults/skills/skill-creator/scripts/validate-skill.mjs) · [배포 검사 워크플로](../.github/workflows/mixdog-package.yml)
+`--check-release`는 같은 바이트 비교를 통과한 스테이징 ZIP을 임시 폴더에 풀고, GitHub에서 고정한 Mixdog 리비전(`8382c929c3d7ae5c6692136c67c63be821838bc0`)의 공식 검증기를 가져와 그 안의 `frontend-skill/`에 실행합니다. 검증기가 오류를 반환하면 배포 검사가 실패합니다. GitHub Actions는 `main` 푸시와 `main` 대상 풀 리퀘스트마다(수동 실행 포함) Ubuntu·Windows에서 오프라인 패키징 테스트를 실행하고, Ubuntu에서 공식 검증기를 한 번 실행합니다. [Mixdog 공식 검증기](https://github.com/tribgames/mixdog/blob/8382c929c3d7ae5c6692136c67c63be821838bc0/src/defaults/skills/skill-creator/scripts/validate-skill.mjs) · [배포 검사 워크플로](../.github/workflows/mixdog-package.yml)
 
 Codex의 `quick_validate.py`에는 표준 폴더를 전달합니다. 설치 확인 시 세 호스트 모두 `frontend-skill`이 목록에 나타나는지, 이름으로 호출하면 해당 본문과 참조를 읽을 수 있는지 확인합니다.
 

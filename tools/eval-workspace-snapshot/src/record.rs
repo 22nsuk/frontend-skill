@@ -24,12 +24,29 @@ fn v1_path(path: &Path) -> Option<String> {
     Some(text.to_owned())
 }
 
+// Quote a workspace-relative path the way change reports do.
+fn quoted(relative: &str) -> String {
+    serde_json::Value::from(relative).to_string()
+}
+
+// An OS error alone does not say which entry stopped the walk.
+fn at(relative: &str) -> impl FnOnce(io::Error) -> io::Error + '_ {
+    move |error| {
+        let place = if relative.is_empty() {
+            "the workspace root".to_owned()
+        } else {
+            quoted(relative)
+        };
+        io::Error::new(error.kind(), format!("Cannot read {place}: {error}"))
+    }
+}
+
 fn require_in_place(path: &Path, relative: &str) -> io::Result<()> {
-    let resolved = path.canonicalize()?;
+    let resolved = path.canonicalize().map_err(at(relative))?;
     if resolved != path {
         return Err(io::Error::other(format!(
             "Refusing to read {}: it resolves to {}",
-            serde_json::to_string(relative)?,
+            quoted(relative),
             resolved.display()
         )));
     }
@@ -67,8 +84,8 @@ fn walk(root: &Path) -> io::Result<Vec<Entry>> {
     let mut directories = vec![(root.to_owned(), String::new())];
     while let Some((dir, prefix)) = directories.pop() {
         require_in_place(&dir, &prefix)?;
-        for child in fs::read_dir(&dir)? {
-            let child = child?;
+        for child in fs::read_dir(&dir).map_err(at(&prefix))? {
+            let child = child.map_err(at(&prefix))?;
             let name = child.file_name();
             let name = name.to_str().ok_or_else(|| {
                 io::Error::new(
@@ -85,22 +102,24 @@ fn walk(root: &Path) -> io::Result<Vec<Entry>> {
             } else {
                 format!("{prefix}/{name}")
             };
-            let ty = child.file_type()?;
+            let ty = child.file_type().map_err(at(&relative))?;
             let kind = if ty.is_symlink() {
                 Kind::Symlink {
-                    target: v1_path(&fs::read_link(&path)?).ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Non-Unicode symlink target for {relative:?}"),
-                        )
-                    })?,
+                    target: v1_path(&fs::read_link(&path).map_err(at(&relative))?).ok_or_else(
+                        || {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("Non-Unicode symlink target for {relative:?}"),
+                            )
+                        },
+                    )?,
                 }
             } else if ty.is_dir() {
                 directories.push((path, relative.clone()));
                 Kind::Dir
             } else if ty.is_file() {
                 require_in_place(&path, &relative)?;
-                hash_file(&path, &mut buffer)?
+                hash_file(&path, &mut buffer).map_err(at(&relative))?
             } else {
                 Kind::Other
             };

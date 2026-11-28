@@ -19,6 +19,11 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
+      - name: Check formatting and lints
+        if: runner.os == 'Linux'
+        run: |
+          cargo fmt --check --manifest-path tools/eval-workspace-snapshot/Cargo.toml
+          cargo clippy --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --locked --manifest-path tools/eval-workspace-snapshot/Cargo.toml
       - name: Check benchmark driver on the workshop fixture
         working-directory: tools/eval-workspace-snapshot
@@ -36,9 +41,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - run: node --test tests/eval-stub-server.test.js
-      - if: runner.os == 'Linux'
-        run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts
+      - run: npx --no-install playwright-core install --with-deps --only-shell chromium
+      - run: node --test tests/eval-stub-server.test.js tests/eval-fixture-baseline.test.js
       - name: Type-check the reservation stub and Mixdog manifest helper
         if: runner.os == 'Linux'
         run: npm run typecheck
