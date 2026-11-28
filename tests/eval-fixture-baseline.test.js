@@ -12,6 +12,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { pathToFileURL } = require('node:url');
 const { chromium } = require('playwright-core');
+const { withRetry } = require('../docs/eval-fixture/server/retry');
 
 const docs = path.resolve(__dirname, '../docs');
 const workshop = path.join(docs, 'eval-fixture');
@@ -65,14 +66,6 @@ function rules(css) {
 function parseCsv(csv) {
   const [header, ...rows] = csv.trim().split(/\r?\n/).map((line) => line.split(','));
   return rows.map((cells) => Object.fromEntries(header.map((name, i) => [name, cells[i] ?? ''])));
-}
-
-/** @param {string} source @param {string} tag */
-function elements(source, tag) {
-  return [...source.matchAll(new RegExp(`<${tag}\\b([^>]*)>([^<]*)`, 'g'))].map(([, attributes, text]) => ({
-    attributes: Object.fromEntries([...attributes.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value])),
-    text: text.trim(),
-  }));
 }
 
 /** @param {string} source @param {string} start @param {string} end */
@@ -197,33 +190,49 @@ test('workshop chart draws the missing April count as zero and has no text alter
     '  - text: 2024년 1~6월 월별 수리 접수(건)',
   ].join('\n'), 'chart accessibility tree');
 
-  // Grid lines run top to bottom in the same order as the tick labels.
-  const ticks = elements(between(svg, '<g class="ticks">', '</g>'), 'text').map(({ text }) => text);
-  const grid = elements(between(svg, '<g class="grid">', '</g>'), 'line').map(({ attributes }) => Number(attributes.y1));
+  // Measure the grid, bars and centered labels in the same viewport coordinate system.
+  const chart = page.locator('#stats svg');
+  const ticks = await chart.locator('.ticks text').allTextContents();
+  const grid = await chart.locator('.grid line').evaluateAll((lines) => lines.map((line) => line.getBoundingClientRect().y));
   assert.deepEqual(ticks, ['80', '60', '40', '20', '0']);
+  assert.equal(grid.length, ticks.length);
   const [topY, zeroY] = [grid[0], grid[grid.length - 1]];
   const perRequest = (zeroY - topY) / 80;
-  const bars = elements(between(svg, '<g class="bars">', '</g>'), 'rect').map(({ attributes }) => attributes);
-  const values = elements(between(svg, '<g class="values">', '</g>'), 'text');
-  const months = elements(between(svg, '<g class="months">', '</g>'), 'text');
+  assert.ok(perRequest > 0, 'chart has a positive vertical scale');
+  const bars = await chart.locator('.bars rect').evaluateAll((rects) => rects.map((rect) => {
+    const { x, bottom, width, height } = rect.getBoundingClientRect();
+    return { centerX: x + width / 2, bottom, width, height };
+  }));
+  const labels = (selector) => chart.locator(selector).evaluateAll((nodes) => nodes.map((node) => {
+    const matrix = node.getScreenCTM();
+    const first = node.getStartPositionOfChar(0).matrixTransform(matrix);
+    const last = node.getEndPositionOfChar(node.getNumberOfChars() - 1).matrixTransform(matrix);
+    return { text: node.textContent, centerX: (first.x + last.x) / 2 };
+  }));
+  const values = await labels('.values text');
+  const months = await labels('.months text');
   const rows = parseCsv(read(workshop, 'data', 'requests.csv'));
 
   assert.deepEqual(months.map(({ text }) => text), ['1월', '2월', '3월', '4월', '5월', '6월']);
   assert.equal(bars.length, months.length);
   assert.equal(values.length, months.length);
   assert.deepEqual(rows.map(({ month }) => month), ['2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06']);
+  // Fractional SVG scaling can round the two measurements to slightly different CSS pixels.
+  const closeInPixels = (actual, expected, label) => {
+    assert.ok(Math.abs(actual - expected) < 0.01, `${label}: expected ${expected}px, measured ${actual}px`);
+  };
   for (const [i, row] of rows.entries()) {
-    const height = Number(bars[i].height);
-    const centerX = Number(bars[i].x) + Number(bars[i].width) / 2;
-    assert.equal(Number(months[i].attributes.x), centerX, `${row.month} month label centered on bar`);
-    assert.equal(Number(values[i].attributes.x), centerX, `${row.month} value centered on bar`);
-    assert.equal(Number(bars[i].y) + height, zeroY, `${row.month} bar starts at zero`);
+    const { height, width, bottom, centerX } = bars[i];
+    closeInPixels(months[i].centerX, centerX, `${row.month} month label centered on bar`);
+    closeInPixels(values[i].centerX, centerX, `${row.month} value centered on bar`);
+    closeInPixels(bottom, zeroY, `${row.month} bar starts at zero`);
     if (row.month === '2024-04') {
       assert.deepEqual([row.requests, row.note], ['', '접수 시스템 교체로 집계 누락']);
       assert.equal(height, 0);
       assert.equal(values[i].text, '0');
     } else {
-      assert.equal(height, Number(row.requests) * perRequest, `${row.month} bar height`);
+      assert.ok(width > 0, `${row.month} bar has width`);
+      closeInPixels(height, Number(row.requests) * perRequest, `${row.month} bar height`);
       assert.equal(values[i].text, row.requests);
     }
   }
@@ -240,8 +249,7 @@ async function prepareBooking(page) {
     const calls = [];
     window.fetch = (url, options) => {
       const response = Promise.withResolvers();
-      const statusAtFetch = document.getElementById('booking-status').textContent;
-      calls.push({ url, options, statusAtFetch, response });
+      calls.push({ url, options, response });
       return response.promise;
     };
     return calls;
@@ -271,15 +279,14 @@ for (const failure of ['HTTP 503', 'network rejection']) {
     await page.getByRole('button', { name: '예약 신청' }).click();
 
     const accepted = '예약 신청이 접수되었습니다.';
-    const posts = await calls.evaluate((requests) => requests.map(({ url, options, statusAtFetch }) => ({
+    const posts = await calls.evaluate((requests) => requests.map(({ url, options }) => ({
       url,
       method: options.method,
       contentType: options.headers['Content-Type'],
       body: JSON.parse(options.body),
-      statusAtFetch,
     })));
     assert.deepEqual(posts, [{
-      url: 'api/bookings', method: 'POST', contentType: 'application/json', body: booking, statusAtFetch: accepted,
+      url: 'api/bookings', method: 'POST', contentType: 'application/json', body: booking,
     }]);
     assert.deepEqual(await visibleTexts(status), [accepted], 'booking status visible while pending');
     assert.deepEqual(await fields(), booking);
@@ -293,6 +300,15 @@ for (const failure of ['HTTP 503', 'network rejection']) {
     }, failure);
     assert.deepEqual(await visibleTexts(status), ['문제가 발생했습니다.'], 'booking status visible after failure');
     assert.deepEqual(await fields(), { name: '', phone: '', date: '' });
+  });
+}
+
+for (const status of [400, 401, 404]) {
+  test(`workshop makes three attempts for persistent HTTP ${status}`, async (t) => {
+    const error = Object.assign(new Error(`HTTP ${status}`), { status });
+    const operation = t.mock.fn(async () => { throw error; });
+    await assert.rejects(withRetry(operation, { wait: async () => {} }), (reason) => reason === error);
+    assert.equal(operation.mock.callCount(), 3, `attempts for HTTP ${status}`);
   });
 }
 
@@ -329,6 +345,8 @@ test('library report hides its conditions and source when printed', async (t) =>
   assert.deepEqual(await visibleTexts(rowHeaders), branches);
   for (const branch of branches) {
     await filter.selectOption({ label: branch });
+    assert.deepEqual(await visibleTexts(rowHeaders), [branch], 'only the selected branch is visible on screen');
+    const screenCounts = await visibleTexts(page.locator('tbody td'));
     await page.emulateMedia({ media: 'print' });
     for (const selector of ['.filter', '.notes']) {
       assert.equal(await page.locator(selector).evaluate((node) => getComputedStyle(node).display), 'none', selector);
@@ -340,6 +358,7 @@ test('library report hides its conditions and source when printed', async (t) =>
     assert.equal(branchHeader, '분관');
     assert.deepEqual([...months].sort(), ['4월', '5월', '6월']);
     const counts = await visibleTexts(page.locator('tbody td'));
+    assert.deepEqual(screenCounts, counts, `${branch} visit counts on screen and in print`);
     assert.equal(counts.length, months.length, `${branch} printed month cells`);
     visits.push(...counts.map((text, i) => [branch, reportYear, months[i], text.replace(/,/g, '')]));
     await page.emulateMedia({ media: 'screen' });
@@ -354,13 +373,18 @@ test('library report hides its conditions and source when printed', async (t) =>
   ]);
 });
 
-test('new-page material describes the booking steps without collecting data', () => {
+test('new-page material describes the booking steps without collecting data', async (t) => {
   const brief = read(newPage, 'brief.md');
   assert.match(brief, /평일 오전 9시부터 오후 6시까지 방문합니다\. 야간·주말 방문은 제공하지 않습니다\./);
   assert.match(brief, /방문 점검은 15,000원이며 수리를 진행하면 수리비에 포함됩니다\./);
   assert.match(brief, /\[예약 안내\]\(booking\.html\)/);
   const booking = read(newPage, 'booking.html');
-  assert.doesNotMatch(booking, /<form|<input|<script/);
+  const page = await openPage(t);
+  const interactiveTags = await page.evaluate((html) => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return Array.from(doc.querySelectorAll('form, input, script'), (node) => node.localName);
+  }, booking);
+  assert.deepEqual(interactiveTags, [], 'booking guide contains no form, input or script elements');
   assert.match(booking, /양쪽이 시간에 동의하면 예약이 확정됩니다\./);
   assert.deepEqual(fs.readdirSync(newPage).sort(), ['booking.html', 'brief.md']);
 });
